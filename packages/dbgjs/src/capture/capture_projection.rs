@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::fs;
+#[cfg(test)]
 use std::path::PathBuf;
 
 use reqwest::redirect::Policy;
@@ -9,14 +10,17 @@ use sourcemap::{DecodedMap, SourceMap, decode_slice};
 use crate::api::service_api::{
     CaptureScriptProvenance, CoverageSnapshot, CpuProfileSnapshot, SourceLocation,
 };
+use crate::source::source_map_resources::{
+    MAX_VIEW_SOURCE_MAP_BYTES as MAX_VIEW_RESOURCE_BYTES, SOURCE_MAP_RESOURCE_TIMEOUT,
+    cache_source_map_for_view, decode_source_map_data_url, local_script_file_path as local_file,
+    read_source_map_cache_for_view, resolve_source_map_url,
+};
 
 struct AvailableMap {
     generated: String,
     checkpoints: Vec<(u32, usize, u32, u32)>,
     map: SourceMap,
 }
-
-const MAX_VIEW_RESOURCE_BYTES: usize = crate::debugger::cdp_runtime::MAX_VIEW_SOURCE_MAP_BYTES;
 
 pub(crate) type PreparedViewSources = BTreeMap<(String, String), VerifiedLocalSources>;
 
@@ -30,10 +34,6 @@ pub(crate) struct VerifiedLocalSources {
 pub(crate) struct CachedSourceMap {
     pub map_url: String,
     pub map_bytes: Vec<u8>,
-}
-
-fn local_file(url: &str) -> Option<PathBuf> {
-    crate::debugger::debugger_engine::local_script_file_path(url)
 }
 
 fn resolved_map_url(url: &str, map_ref: Option<&str>) -> Result<String, String> {
@@ -59,9 +59,7 @@ fn resolved_map_url(url: &str, map_ref: Option<&str>) -> Result<String, String> 
             .map(|directory| directory.join(map_ref).to_string_lossy().into_owned())
             .ok_or_else(|| format!("{url}: source map URL {map_ref} cannot be resolved"));
     }
-    url::Url::parse(map_ref)
-        .or_else(|_| url::Url::parse(url).and_then(|base| base.join(map_ref)))
-        .map(|url| url.to_string())
+    resolve_source_map_url(url, map_ref)
         .map_err(|_| format!("{url}: source map URL {map_ref} cannot be resolved"))
 }
 
@@ -76,7 +74,7 @@ pub(crate) fn load_cached_source_map(
         ));
     }
     let map_url = resolved_map_url(generated_url, map_ref)?;
-    let map_bytes = crate::debugger::cdp_runtime::read_source_map_cache_for_view(script_hash, &map_url)
+    let map_bytes = read_source_map_cache_for_view(script_hash, &map_url)
         .ok_or_else(|| format!(
             "{generated_url}: verified source map cache entry for {map_url} is unavailable; raw measurements retained"
         ))?;
@@ -101,7 +99,7 @@ pub(crate) fn recover_source_map_for_view(
         if reference.len() > MAX_VIEW_RESOURCE_BYTES {
             return Err(format!("{url}: inline source map exceeds view resource limit; raw measurements retained"));
         }
-        return crate::debugger::cdp_runtime::decode_source_map_data_url(reference)
+        return decode_source_map_data_url(reference)
             .map(|bytes| (bytes, url.to_owned()))
             .map_err(|error| format!("{url}: inline source map unavailable ({error}); raw measurements retained"));
     }
@@ -202,7 +200,7 @@ fn recover_map_for_view(
         if reference.len() > MAX_VIEW_RESOURCE_BYTES {
             return Err(format!("{url}: inline source map exceeds view resource limit; raw measurements retained"));
         }
-        let bytes = crate::debugger::cdp_runtime::decode_source_map_data_url(reference)
+        let bytes = decode_source_map_data_url(reference)
             .map_err(|error| format!("{url}: inline source map unavailable ({error}); raw measurements retained"))?;
         return Ok((bytes, url.to_owned()));
     }
@@ -274,7 +272,7 @@ async fn fetch_verified_view_sources(
         let map_url = resolved_map_url(url, map_ref)?;
         let bytes = fetch_view_resource(client, &map_url).await?;
         if let Some(hash) = provenance.source_sha256.as_deref()
-            && let Err(error) = crate::debugger::cdp_runtime::cache_source_map_for_view(hash, &map_url, bytes.clone()).await
+            && let Err(error) = cache_source_map_for_view(hash, &map_url, bytes.clone()).await
         {
             eprintln!("{error}");
         }
@@ -290,14 +288,14 @@ pub(crate) async fn prepare_view_sources<'a>(
     let mut prepared = BTreeMap::new();
     let mut diagnostics = Vec::new();
     let client = match reqwest::Client::builder()
-        .timeout(crate::debugger::cdp_runtime::SOURCE_MAP_RESOURCE_TIMEOUT)
+        .timeout(SOURCE_MAP_RESOURCE_TIMEOUT)
         .redirect(Policy::none())
         .build()
     {
         Ok(client) => client,
         Err(error) => return (prepared, vec![format!("view HTTP client unavailable: {error}")]),
     };
-    let deadline = tokio::time::Instant::now() + crate::debugger::cdp_runtime::SOURCE_MAP_RESOURCE_TIMEOUT;
+    let deadline = tokio::time::Instant::now() + SOURCE_MAP_RESOURCE_TIMEOUT;
     for (id, provenance) in scripts {
         let key = (id.to_owned(), provenance.url.clone());
         if prepared.contains_key(&key) || load_map(Some(provenance), &provenance.url, needs_generated_source, None).is_ok() {
@@ -957,12 +955,12 @@ mod tests {
         .unwrap();
         let cached = format!("dbgjs-source-map-v1\n{:x}\n", Sha256::digest(&source_map));
         let cpu_map_url = format!("https://example.invalid/cached-view-{}.map", std::process::id());
-        let cpu_path = crate::debugger::cdp_runtime::source_map_cache_path_for_test(
+        let cpu_path = crate::source::source_map_resources::source_map_cache_path_for_test(
             cpu_provenance.source_sha256.as_deref().unwrap(),
             &cpu_map_url,
         );
         let coverage_map_url = resolved_map_url(&provenance.url, provenance.source_map_url.as_deref()).unwrap();
-        let coverage_path = crate::debugger::cdp_runtime::source_map_cache_path_for_test(
+        let coverage_path = crate::source::source_map_resources::source_map_cache_path_for_test(
             provenance.source_sha256.as_deref().unwrap(),
             &coverage_map_url,
         );
@@ -1120,7 +1118,7 @@ mod tests {
         assert!(prepared.is_empty());
         assert!(errors.iter().any(|error| error.contains("identity changed")), "{errors:?}");
         assert_eq!(hits.load(Ordering::SeqCst), 8);
-        let cache_path = crate::debugger::cdp_runtime::source_map_cache_path_for_test(
+        let cache_path = crate::source::source_map_resources::source_map_cache_path_for_test(
             coverage.sources[0].provenance.as_ref().unwrap().source_sha256.as_deref().unwrap(),
             &format!("{base}/bundle.js.map"),
         );
@@ -1188,7 +1186,7 @@ mod tests {
         assert!(changed.sources[0].functions[0].authored_location.is_none());
         assert!(changed.projection_diagnostics.iter().any(|error| error.contains("identity")));
         assert_eq!(hits.load(Ordering::SeqCst), 1);
-        let path = crate::debugger::cdp_runtime::source_map_cache_path_for_test(
+        let path = crate::source::source_map_resources::source_map_cache_path_for_test(
             snapshot.sources[0].provenance.as_ref().unwrap().source_sha256.as_deref().unwrap(),
             &map_url,
         );
@@ -1229,7 +1227,7 @@ mod tests {
         assert!(errors.is_empty(), "{errors:?}");
         project_stored_coverage_with_sources(&mut snapshot, &prepared);
         assert!(snapshot.sources[0].functions[0].authored_location.is_some());
-        let cache_path = crate::debugger::cdp_runtime::source_map_cache_path_for_test(
+        let cache_path = crate::source::source_map_resources::source_map_cache_path_for_test(
             snapshot.sources[0].provenance.as_ref().unwrap().source_sha256.as_deref().unwrap(),
             &map_url,
         );

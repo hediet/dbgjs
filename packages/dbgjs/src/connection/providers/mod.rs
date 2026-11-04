@@ -1,3 +1,4 @@
+pub mod node_executable;
 pub mod playwright_proxy;
 
 use std::collections::BTreeMap;
@@ -27,6 +28,7 @@ use crate::debugger::debugger_engine::SessionKey;
 use crate::connection::discovery::{
     LeaseObserver, PauseChildrenKey, PauseChildrenLease, PauseChildrenLeaseRegistry,
 };
+use crate::connection::discovery::process_discovery::chromium_browser_executables_json;
 use crate::connection::discovery::process_tree_source::ProcessTreeTargetSource;
 use crate::debugger::resource_graph::ResourceId;
 use crate::api::service_api::{
@@ -34,6 +36,7 @@ use crate::api::service_api::{
 };
 use crate::connection::transport::session_transport::RawCdpSession;
 use crate::connection::transport::stdio_transport::CdpStdioTransport;
+use node_executable::{NodeExecutableNotFound, resolve_node_executable};
 use crate::service::virtual_browser_root::{TargetEndpoint, VirtualBrowserRoot};
 
 const PLAYWRIGHT_STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
@@ -340,10 +343,12 @@ impl ConnectionRuntime {
                     [
                         ("DBGJS_PROCESS_ROOT_PID", process_id.to_string()),
                         ("DBGJS_PROCESS_MODE", "single".to_owned()),
+                        ("DBGJS_BROWSER_EXECUTABLES", chromium_browser_executables_json()),
                     ],
                 )
                 .await?;
-                (launch.endpoint, Some(launch.child), true, launch.events)
+                let direct_debugger = !launch.endpoint.contains("/devtools/browser/");
+                (launch.endpoint, Some(launch.child), direct_debugger, launch.events)
             }
             ConnectionConfiguration::Playwright {
                 url,
@@ -401,6 +406,12 @@ impl ConnectionRuntime {
                 runtime_args,
                 env,
             } => {
+                // The bare default would be looked up on the service's PATH, which may lack node.
+                let runtime_executable = if runtime_executable == "node" {
+                    resolve_node_executable()?.to_string_lossy().into_owned()
+                } else {
+                    runtime_executable.clone()
+                };
                 let launch = launch_provider(
                     NODE_HELPER,
                     "Node.js",
@@ -413,7 +424,7 @@ impl ConnectionRuntime {
                                 .expect("Node.js arguments always serialize"),
                         ),
                         ("DBGJS_NODE_CWD", cwd.clone()),
-                        ("DBGJS_NODE_EXECUTABLE", runtime_executable.clone()),
+                        ("DBGJS_NODE_EXECUTABLE", runtime_executable),
                         (
                             "DBGJS_NODE_RUNTIME_ARGS",
                             serde_json::to_string(runtime_args)
@@ -490,6 +501,7 @@ impl ConnectionRuntime {
             [
                 ("DBGJS_PROCESS_ROOT_PID", root_pid.to_string()),
                 ("DBGJS_PROCESS_MODE", "tree".to_owned()),
+                ("DBGJS_BROWSER_EXECUTABLES", chromium_browser_executables_json()),
             ],
         )
         .await?;
@@ -1112,6 +1124,9 @@ impl ConnectionRuntime {
                     }
                     ProviderEvent::ScanComplete { .. } => {}
                     ProviderEvent::ActivationComplete { .. } => {}
+                    // A single-process provider lists processes only during startup, which
+                    // `launch_provider` answers.
+                    ProviderEvent::ListProcesses { .. } => {}
                 }
             }
         });
@@ -1297,7 +1312,7 @@ async fn launch_playwright(
         }
         None => find_playwright_package()?,
     };
-    let node = env::var_os("DBGJS_NODE").unwrap_or_else(|| "node".into());
+    let node = resolve_node_executable()?;
     let mut command = Command::new(&node);
     command
         .arg("--input-type=module")
@@ -1322,7 +1337,7 @@ async fn launch_playwright(
     let mut child = command
         .spawn()
         .map_err(|source| ConnectionProviderError::Spawn {
-            executable: PathBuf::from(node),
+            executable: node,
             source,
         })?;
     let stdout = child
@@ -1378,7 +1393,7 @@ async fn launch_provider<const N: usize>(
     capture_events: bool,
     environment: [(&str, String); N],
 ) -> Result<ProviderLaunch, ConnectionProviderError> {
-    let node = env::var_os("DBGJS_NODE").unwrap_or_else(|| "node".into());
+    let node = resolve_node_executable()?;
     let mut command = Command::new(&node);
     command
         .arg("--input-type=module")
@@ -1397,7 +1412,7 @@ async fn launch_provider<const N: usize>(
     let mut child = command
         .spawn()
         .map_err(|source| ConnectionProviderError::Spawn {
-            executable: PathBuf::from(node),
+            executable: node,
             source,
         })?;
     let stdout = child
@@ -1405,7 +1420,27 @@ async fn launch_provider<const N: usize>(
         .take()
         .ok_or(ConnectionProviderError::MissingProviderStdout)?;
     let mut lines = BufReader::new(stdout).lines();
-    let line = match timeout(PLAYWRIGHT_STARTUP_TIMEOUT, lines.next_line()).await {
+    // Before its handshake, a process-tree provider asks for the process list it starts from.
+    let mut stdin = child.stdin.take();
+    let startup = timeout(PLAYWRIGHT_STARTUP_TIMEOUT, async {
+        loop {
+            let Some(line) = lines.next_line().await? else {
+                return Ok(None);
+            };
+            if let Ok(ProviderEvent::ListProcesses { id }) = serde_json::from_str(&line) {
+                if let Some(stdin) = stdin.as_mut() {
+                    let command = format!("{}\n", process_listing_command(id).await);
+                    stdin.write_all(command.as_bytes()).await?;
+                    stdin.flush().await?;
+                }
+                continue;
+            }
+            return Ok::<_, std::io::Error>(Some(line));
+        }
+    })
+    .await;
+    child.stdin = stdin;
+    let line = match startup {
         Err(_) => {
             terminate_provider(&mut child).await;
             return Err(ConnectionProviderError::NamedStartupTimeout(provider_name));
@@ -1622,6 +1657,18 @@ pub(crate) enum ProviderEvent {
         endpoint: Option<String>,
         error: Option<String>,
     },
+    /// The provider asks for all processes; answer with [`process_listing_command`].
+    ListProcesses {
+        id: u64,
+    },
+}
+
+/// The control command that answers a provider's `listProcesses` request.
+pub(crate) async fn process_listing_command(id: u64) -> serde_json::Value {
+    match crate::connection::discovery::process_discovery::provider_processes().await {
+        Ok(processes) => serde_json::json!({ "command": "processes", "id": id, "processes": processes }),
+        Err(error) => serde_json::json!({ "command": "processes", "id": id, "error": error.to_string() }),
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -1640,6 +1687,8 @@ pub enum ConnectionProviderError {
     InvalidProcessId(u32),
     #[error("scoped process-tree target IDs must not be empty")]
     EmptyProcessTreeTarget,
+    #[error(transparent)]
+    NodeNotFound(#[from] NodeExecutableNotFound),
     #[error("failed to launch connection process with {executable}: {source}")]
     Spawn {
         executable: PathBuf,
@@ -1720,6 +1769,13 @@ pub(crate) mod raw_session_tests {
 
     pub(crate) async fn runtime(generation: u64) -> Arc<ConnectionRuntime> {
         let transport = Arc::new(IdleTransport(Arc::new(Mutex::new(None))));
+        runtime_with_transport(generation, transport).await
+    }
+
+    pub(crate) async fn runtime_with_transport<T: ManagedCdpTransport + 'static>(
+        generation: u64,
+        transport: Arc<T>,
+    ) -> Arc<ConnectionRuntime> {
         let cdp = Arc::new(CdpConnection::connect_transport(transport).await.unwrap());
         let (provider_target_sender, provider_target_events) = mpsc::unbounded_channel();
         Arc::new(ConnectionRuntime {
@@ -1737,6 +1793,14 @@ pub(crate) mod raw_session_tests {
             provider_target_sender,
             pause_future_children: OnceLock::new(),
         })
+    }
+
+    pub(crate) fn emit(runtime: &ConnectionRuntime, event: ProviderTargetEvent) {
+        runtime.provider_target_sender.send(event).unwrap();
+    }
+
+    pub(crate) async fn wait_events_closed(runtime: &ConnectionRuntime) {
+        runtime.provider_target_sender.closed().await;
     }
 
     #[tokio::test]

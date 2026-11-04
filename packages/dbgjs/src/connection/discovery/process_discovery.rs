@@ -10,11 +10,11 @@ use tokio::process::Command;
 
 use crate::connection::providers::ConnectionRuntime;
 use crate::api::service_api::{
-    AgentSessionSnapshot, ConnectionConfiguration, ProcessRole, ProcessRootKind, ProcessSnapshot,
-    ProcessTargetSnapshot, ProcessTreeSnapshot,
+    AgentSessionSnapshot, BrowserRemoteDebugging, ConnectionConfiguration, ProcessRole,
+    ProcessRootKind, ProcessSnapshot, ProcessTargetSnapshot, ProcessTreeSnapshot,
 };
 
-#[cfg(windows)]
+#[cfg(all(test, windows))]
 // Cold PowerShell/CIM startup on hosted Windows runners can exceed 15 seconds.
 const PROCESS_QUERY_TIMEOUT: Duration = Duration::from_secs(60);
 const VSCODE_IPC_TIMEOUT: Duration = Duration::from_secs(5);
@@ -153,34 +153,67 @@ pub async fn discover_recognized_process_trees()
     Ok(trees)
 }
 
-pub async fn populate_process_tree_targets(trees: &mut [ProcessTreeSnapshot]) {
-    let observations = join_all(trees.iter().map(|tree| {
+/// A process tree's connection as discovery may use it.
+pub enum ProcessTreeConnection {
+    Open {
+        runtime: std::sync::Arc<ConnectionRuntime>,
+        /// Connected for this discovery, so its targets may still be appearing.
+        just_connected: bool,
+    },
+    /// Connecting failed; discovery reports this instead of trying again.
+    Failed(String),
+}
+
+/// Lists each tree's targets. Roots in `connections` (keyed by root process ID) use that connection;
+/// others get a temporary connection that waits for the target list to settle.
+pub async fn populate_process_tree_targets(
+    trees: &mut [ProcessTreeSnapshot],
+    connections: &BTreeMap<u32, ProcessTreeConnection>,
+) {
+    let observations = join_all(trees.iter().filter(|tree| targets_observable_silently(tree)).map(|tree| {
         let root_process_id = tree.root_process_id;
         let process_ids = tree
             .processes
             .iter()
             .map(|process| process.process_id)
             .collect::<BTreeSet<_>>();
+        let connection = connections.get(&root_process_id);
         async move {
-            (
-                root_process_id,
-                discover_process_tree_targets(root_process_id, &process_ids).await,
-            )
+            let targets = match connection {
+                Some(ProcessTreeConnection::Open { runtime, just_connected: true }) => {
+                    settled_targets(runtime, &process_ids, FRESH_SETTLE_DEADLINE).await
+                }
+                Some(ProcessTreeConnection::Open { runtime, just_connected: false }) => match runtime.refresh_targets().await {
+                    Some(observation) => Ok(process_tree_targets(observation.targets, &process_ids)),
+                    None => Err("process tree has no observable target source".to_owned()),
+                },
+                Some(ProcessTreeConnection::Failed(message)) => Err(message.clone()),
+                None => discover_process_tree_targets(root_process_id, &process_ids).await,
+            };
+            (root_process_id, targets)
         }
     }))
     .await
     .into_iter()
     .collect::<BTreeMap<_, _>>();
     for tree in trees {
-        match observations
-            .get(&tree.root_process_id)
-            .expect("every requested process tree has an observation")
-        {
+        let Some(observation) = observations.get(&tree.root_process_id) else {
+            continue;
+        };
+        match observation {
             Ok(targets) => tree.targets = targets.clone(),
             Err(error) => tree.target_discovery_error = Some(error.clone()),
         }
         tree.targets_observed = true;
     }
+}
+
+/// Listing must never request approval: only browsers with an approval-free debugging port
+/// are queried. Others report their [`BrowserRemoteDebugging`] state instead of targets.
+pub fn targets_observable_silently(tree: &ProcessTreeSnapshot) -> bool {
+    tree.browser.as_ref().is_none_or(|browser| {
+        matches!(browser.remote_debugging, BrowserRemoteDebugging::Open { .. })
+    })
 }
 
 async fn enrich_process_trees(
@@ -209,7 +242,32 @@ async fn enrich_process_trees(
             .filter_map(|tree| agent_session_query(tree, process_metadata))
             .map(tokio::spawn),
     );
-    let (diagnostics, agent_sessions) = tokio::join!(diagnostics, agent_sessions);
+    let browsers = join_all(
+        trees
+            .iter()
+            .filter(|tree| tree.root_kind == ProcessRootKind::Browser)
+            .filter_map(|tree| process_metadata.get(&tree.root_process_id))
+            .map(|root| async move {
+                (
+                    root.process_id,
+                    super::browser_root::observe_browser_root(
+                        root.process_id,
+                        command_argument(&root.command_line, "--user-data-dir"),
+                        command_argument(&root.command_line, "--remote-debugging-port"),
+                    )
+                    .await,
+                )
+            }),
+    );
+    let (diagnostics, agent_sessions, browsers) = tokio::join!(diagnostics, agent_sessions, browsers);
+    for (root_process_id, browser) in browsers {
+        if let Some(tree) = trees
+            .iter_mut()
+            .find(|tree| tree.root_process_id == root_process_id)
+        {
+            tree.browser = Some(browser);
+        }
+    }
     for (root_process_id, diagnostics) in diagnostics {
         if let Ok(diagnostics) = diagnostics
             && let Some(tree) = trees
@@ -246,61 +304,84 @@ async fn discover_process_tree_targets(
     .await
     .map_err(|error| error.to_string())?;
     let result = async {
-        let mut observation = runtime
-            .refresh_targets()
-            .await
-            .ok_or_else(|| "process tree has no observable target source".to_owned())?;
         if !runtime.set_target_discovery(true).await {
             return Err("process tree cannot enable target discovery".to_owned());
         }
-
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-        let mut stable_since = tokio::time::Instant::now();
-        loop {
-            if matches!(
-                tokio::time::timeout(Duration::from_millis(100), observation.revisions.changed(),)
-                    .await,
-                Ok(Ok(()))
-            ) {
-                observation = runtime
-                    .observe_targets()
-                    .ok_or_else(|| "process tree target source disappeared".to_owned())?;
-                stable_since = tokio::time::Instant::now();
-            }
-            if stable_since.elapsed() >= Duration::from_millis(500)
-                || tokio::time::Instant::now() >= deadline
-            {
-                break;
-            }
-        }
-
-        Ok(observation
-            .targets
-            .into_iter()
-            .map(|target| ProcessTargetSnapshot {
-                process_id: target.process_id,
-                attachment: Some(if target.snapshot.attached {
-                    crate::api::service_api::TargetAttachmentState::CdpClient
-                } else {
-                    crate::api::service_api::TargetAttachmentState::Detached
-                }),
-                target: target.snapshot,
-            })
-            .filter(|target| {
-                target.process_id.is_none_or(|process_id| {
-                    process_ids.contains(&process_id)
-                        && !matches!(
-                            target.target.target_type.as_str(),
-                            "node" | "process" | "browser"
-                        )
-                })
-            })
-            .collect())
+        settled_targets(&runtime, process_ids, Duration::from_secs(5)).await
     }
     .await;
-    runtime.set_target_discovery(false).await;
-    runtime.close().await;
+    // Closing detaches from every process of the tree, which can take seconds; the listing is ready.
+    tokio::spawn(async move {
+        runtime.set_target_discovery(false).await;
+        runtime.close().await;
+    });
     result
+}
+
+/// How long a connection opened for discovery may take to report its pages.
+const FRESH_SETTLE_DEADLINE: Duration = Duration::from_secs(2);
+
+/// The listed targets of a new connection once they stopped changing for 300 ms, or at `deadline`.
+/// Settles on the listed targets only: Node process targets keep appearing for seconds while
+/// inspectors activate, but the listing drops them, so they must not hold discovery up.
+async fn settled_targets(
+    runtime: &ConnectionRuntime,
+    process_ids: &BTreeSet<u32>,
+    deadline: Duration,
+) -> Result<Vec<ProcessTargetSnapshot>, String> {
+    let mut observation = runtime
+        .refresh_targets()
+        .await
+        .ok_or_else(|| "process tree has no observable target source".to_owned())?;
+    let deadline = tokio::time::Instant::now() + deadline;
+    let mut stable_since = tokio::time::Instant::now();
+    let mut listed = process_tree_targets(std::mem::take(&mut observation.targets), process_ids);
+    loop {
+        if matches!(
+            tokio::time::timeout(Duration::from_millis(100), observation.revisions.changed()).await,
+            Ok(Ok(()))
+        ) {
+            let next = runtime
+                .observe_targets()
+                .ok_or_else(|| "process tree target source disappeared".to_owned())?;
+            let next_listed = process_tree_targets(next.targets, process_ids);
+            if next_listed != listed {
+                stable_since = tokio::time::Instant::now();
+            }
+            listed = next_listed;
+        }
+        if stable_since.elapsed() >= Duration::from_millis(300) || tokio::time::Instant::now() >= deadline {
+            return Ok(listed);
+        }
+    }
+}
+
+/// The page targets of one process tree: its renderers and pages, not the processes themselves.
+fn process_tree_targets(
+    targets: Vec<crate::service::virtual_browser_root::HostTarget>,
+    process_ids: &BTreeSet<u32>,
+) -> Vec<ProcessTargetSnapshot> {
+    targets
+        .into_iter()
+        .map(|target| ProcessTargetSnapshot {
+            process_id: target.process_id,
+            attachment: Some(if target.snapshot.attached {
+                crate::api::service_api::TargetAttachmentState::CdpClient
+            } else {
+                crate::api::service_api::TargetAttachmentState::Detached
+            }),
+            target: target.snapshot,
+        })
+        .filter(|target| {
+            target.process_id.is_none_or(|process_id| {
+                process_ids.contains(&process_id)
+                    && !matches!(
+                        target.target.target_type.as_str(),
+                        "node" | "process" | "browser"
+                    )
+            })
+        })
+        .collect()
 }
 
 fn agent_session_query(
@@ -522,9 +603,176 @@ fn configure_background_command(_command: &mut Command) {}
 
 #[cfg(windows)]
 async fn query_windows_processes() -> Result<Vec<WindowsProcess>, ProcessDiscoveryError> {
+    tokio::task::spawn_blocking(windows_processes::snapshot)
+        .await
+        .map_err(|error| ProcessDiscoveryError::QueryFailed(error.to_string()))?
+}
+
+/// All processes in the form the process-tree provider uses, so that on Windows it asks the
+/// service instead of starting PowerShell for every scan.
+pub(crate) async fn provider_processes() -> Result<Vec<serde_json::Value>, ProcessDiscoveryError> {
+    Ok(query_windows_processes()
+        .await?
+        .into_iter()
+        .map(|process| {
+            serde_json::json!({
+                "pid": process.process_id,
+                "parentPid": process.parent_process_id,
+                "name": process.name,
+                "commandLine": process.command_line,
+                "creationDate": process.creation_date,
+            })
+        })
+        .collect())
+}
+
+/// Lists processes natively, reporting the values `Get-CimInstance Win32_Process` would, but in
+/// milliseconds instead of a PowerShell start. The process-tree provider still names targets from
+/// its CIM query, so `CreationDate` keeps the `/Date(<ms>)/` form of PowerShell's JSON. The
+/// executable path is the resolved image file, where CIM reports the path as launched.
+#[cfg(windows)]
+mod windows_processes {
+    use super::{ProcessDiscoveryError, WindowsProcess};
+    use windows_sys::Wdk::System::Threading::{
+        NtQueryInformationProcess, ProcessCommandLineInformation,
+    };
+    use windows_sys::Win32::Foundation::{
+        CloseHandle, FILETIME, HANDLE, INVALID_HANDLE_VALUE, UNICODE_STRING,
+    };
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
+        TH32CS_SNAPPROCESS,
+    };
+    use windows_sys::Win32::System::Threading::{
+        GetProcessTimes, OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+        QueryFullProcessImageNameW,
+    };
+
+    struct OwnedHandle(HANDLE);
+
+    impl Drop for OwnedHandle {
+        fn drop(&mut self) {
+            unsafe { CloseHandle(self.0) };
+        }
+    }
+
+    pub(super) fn snapshot() -> Result<Vec<WindowsProcess>, ProcessDiscoveryError> {
+        let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
+        if snapshot == INVALID_HANDLE_VALUE {
+            return Err(ProcessDiscoveryError::Query(std::io::Error::last_os_error()));
+        }
+        let snapshot = OwnedHandle(snapshot);
+        let mut entry: PROCESSENTRY32W = unsafe { std::mem::zeroed() };
+        entry.dwSize = size_of::<PROCESSENTRY32W>() as u32;
+        let mut path_buffer = vec![0u16; 32 * 1024];
+        let mut processes = Vec::new();
+        let mut more = unsafe { Process32FirstW(snapshot.0, &mut entry) } != 0;
+        while more {
+            processes.push(process(&entry, &mut path_buffer));
+            more = unsafe { Process32NextW(snapshot.0, &mut entry) } != 0;
+        }
+        Ok(processes)
+    }
+
+    fn process(entry: &PROCESSENTRY32W, path_buffer: &mut [u16]) -> WindowsProcess {
+        let name_length = entry
+            .szExeFile
+            .iter()
+            .position(|&character| character == 0)
+            .unwrap_or(entry.szExeFile.len());
+        // Processes of other users or protected processes may not open; like CIM, they are still
+        // listed, just without the details.
+        let handle = unsafe {
+            OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, entry.th32ProcessID)
+        };
+        let handle = (!handle.is_null()).then(|| OwnedHandle(handle));
+        WindowsProcess {
+            process_id: entry.th32ProcessID,
+            parent_process_id: entry.th32ParentProcessID,
+            name: String::from_utf16_lossy(&entry.szExeFile[..name_length]),
+            command_line: handle.as_ref().map(|handle| command_line(handle.0)).unwrap_or_default(),
+            creation_date: handle.as_ref().map(|handle| creation_date(handle.0)).unwrap_or_default(),
+            executable_path: handle
+                .as_ref()
+                .map(|handle| image_path(handle.0, path_buffer))
+                .unwrap_or_default(),
+            vscode_process_type: None,
+        }
+    }
+
+    fn command_line(handle: HANDLE) -> String {
+        let mut length = 0u32;
+        unsafe {
+            NtQueryInformationProcess(
+                handle,
+                ProcessCommandLineInformation,
+                std::ptr::null_mut(),
+                0,
+                &mut length,
+            )
+        };
+        if length == 0 {
+            return String::new();
+        }
+        // The result is a UNICODE_STRING followed by its characters, so it needs pointer alignment.
+        let mut buffer = vec![0usize; (length as usize).div_ceil(size_of::<usize>())];
+        let status = unsafe {
+            NtQueryInformationProcess(
+                handle,
+                ProcessCommandLineInformation,
+                buffer.as_mut_ptr().cast(),
+                (buffer.len() * size_of::<usize>()) as u32,
+                &mut length,
+            )
+        };
+        if status < 0 {
+            return String::new();
+        }
+        let text = unsafe { &*buffer.as_ptr().cast::<UNICODE_STRING>() };
+        if text.Buffer.is_null() {
+            return String::new();
+        }
+        let characters =
+            unsafe { std::slice::from_raw_parts(text.Buffer, usize::from(text.Length) / 2) };
+        // Some command lines contain NULs (e.g. WMI providers); CIM ends them at the first one.
+        let length = characters.iter().position(|&character| character == 0).unwrap_or(characters.len());
+        String::from_utf16_lossy(&characters[..length])
+    }
+
+    fn creation_date(handle: HANDLE) -> String {
+        let empty = FILETIME { dwLowDateTime: 0, dwHighDateTime: 0 };
+        let (mut created, mut exited, mut kernel, mut user) = (empty, empty, empty, empty);
+        if unsafe { GetProcessTimes(handle, &mut created, &mut exited, &mut kernel, &mut user) } == 0
+        {
+            return String::new();
+        }
+        let ticks = (u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime);
+        // FILETIME counts 100 ns since 1601; PowerShell writes milliseconds since 1970.
+        let milliseconds = (ticks / 10_000) as i64 - 11_644_473_600_000;
+        format!("/Date({milliseconds})/")
+    }
+
+    fn image_path(handle: HANDLE, buffer: &mut [u16]) -> String {
+        let mut size = buffer.len() as u32;
+        if unsafe {
+            QueryFullProcessImageNameW(handle, PROCESS_NAME_WIN32, buffer.as_mut_ptr(), &mut size)
+        } == 0
+        {
+            return String::new();
+        }
+        String::from_utf16_lossy(&buffer[..size as usize])
+    }
+}
+
+/// The CIM query the native listing replaced; the process-tree provider still uses it.
+#[cfg(all(test, windows))]
+async fn query_cim_processes() -> Result<Vec<WindowsProcess>, ProcessDiscoveryError> {
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    // Without a console, Windows PowerShell writes stdout in the OEM code page, so any
+    // non-ASCII command line would make the whole listing invalid UTF-8.
     let script = r#"
         $ErrorActionPreference = "Stop"
+        [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
         @(Get-CimInstance Win32_Process |
             Select-Object ProcessId,ParentProcessId,Name,CommandLine,CreationDate,ExecutablePath) |
             ConvertTo-Json -Compress
@@ -1020,6 +1268,7 @@ fn process_trees(
                 targets: Vec::new(),
                 targets_observed: false,
                 target_discovery_error: None,
+                browser: None,
             }
         })
         .collect()
@@ -1274,20 +1523,43 @@ fn process_root_kind(
     }
 }
 
+/// Executable names of Chromium-based browser main processes, lowercase and without `.exe`.
+/// Covers Windows, Linux (`/proc` or `ps` names) and macOS app bundle executables. This is the
+/// single source of truth: the process-tree helper receives it as `DBGJS_BROWSER_EXECUTABLES`.
+pub const CHROMIUM_BROWSER_EXECUTABLES: &[&str] = &[
+    "chrome",
+    "chrome-headless-shell",
+    "chromium",
+    "chromium-browser",
+    "google-chrome",
+    "google-chrome-stable",
+    "google chrome",
+    "google chrome beta",
+    "google chrome dev",
+    "google chrome canary",
+    "google chrome for testing",
+    "msedge",
+    "microsoft-edge",
+    "microsoft edge",
+    "brave",
+    "brave-browser",
+    "brave browser",
+    "opera",
+];
+
+pub fn is_chromium_browser_executable(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    let name = name.strip_suffix(".exe").unwrap_or(&name);
+    CHROMIUM_BROWSER_EXECUTABLES.contains(&name)
+}
+
+pub fn chromium_browser_executables_json() -> String {
+    serde_json::to_string(CHROMIUM_BROWSER_EXECUTABLES).expect("browser names always serialize")
+}
+
 fn is_browser_main_candidate(process: &WindowsProcess) -> bool {
-    let name = process.name.to_ascii_lowercase();
-    let command = process.command_line.to_ascii_lowercase();
-    !command.contains("--type=")
-        && matches!(
-            name.as_str(),
-            "chrome.exe"
-                | "chrome-headless-shell.exe"
-                | "chromium.exe"
-                | "msedge.exe"
-                | "brave.exe"
-                | "brave-browser.exe"
-                | "opera.exe"
-        )
+    !process.command_line.to_ascii_lowercase().contains("--type=")
+        && is_chromium_browser_executable(&process.name)
 }
 
 fn is_electron_main_candidate(
@@ -1327,7 +1599,18 @@ fn is_node_process(process: &WindowsProcess) -> bool {
             || command.contains("--node-ipc")
             || command.contains("bootstrap-fork")
             || command.contains("tsserver.js")
-            || command.contains("typingsinstaller.js"))
+            || command.contains("typingsinstaller.js")
+            || is_packaged_vscode_executable(&name) && is_copilot_sdk_bootstrap(&command))
+}
+
+fn is_copilot_sdk_bootstrap(command: &str) -> bool {
+    // This SDK preload runs in Electron's environment-only Node mode.
+    command
+        .replace('\\', "/")
+        .split_once("/@github/copilot-sdk-win32-x64/preloads/extension_bootstrap.mjs")
+        .is_some_and(|(_, suffix)| {
+            suffix.is_empty() || suffix.starts_with('"') || suffix.starts_with(char::is_whitespace)
+        })
 }
 
 fn is_attachable_vscode_process(process: &WindowsProcess) -> bool {
@@ -1538,6 +1821,84 @@ mod tests {
         assert!(!current.command_line.is_empty());
         assert!(!current.creation_date.is_empty());
         assert!(!current.executable_path.is_empty());
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn native_windows_processes_match_cim() {
+        // The process-tree provider names targets from CIM, so both must agree exactly.
+        let cim = query_cim_processes().await.unwrap();
+        let native = query_windows_processes()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|process| (process.process_id, process))
+            .collect::<BTreeMap<_, _>>();
+        let mut compared = 0;
+        let mut mismatches = Vec::new();
+        for expected in cim.iter().filter(|process| {
+            process.process_id != 0 && !process.command_line.is_empty()
+        }) {
+            // A process that exited, or whose PID was reused, between the two queries is skipped,
+            // and so is one that exited before it could be opened.
+            let Some(actual) = native.get(&expected.process_id) else {
+                continue;
+            };
+            if actual.creation_date.is_empty() {
+                continue;
+            }
+            if actual.creation_date != expected.creation_date {
+                if actual.name != expected.name {
+                    continue;
+                }
+                mismatches.push(format!(
+                    "{} creation {:?} != {:?}",
+                    expected.process_id, actual.creation_date, expected.creation_date
+                ));
+                continue;
+            }
+            compared += 1;
+            let process_id = expected.process_id;
+            for (field, actual, expected) in [
+                ("name", &actual.name, &expected.name),
+                ("command line", &actual.command_line, &expected.command_line),
+            ] {
+                if actual != expected {
+                    mismatches.push(format!("{process_id} {field} {actual:?} != {expected:?}"));
+                }
+            }
+            // CIM reports the path as launched; the native listing reports the resolved file.
+            if actual.executable_path.is_empty() != expected.executable_path.is_empty() {
+                mismatches.push(format!("{process_id} path {:?}", actual.executable_path));
+            }
+            if actual.parent_process_id != expected.parent_process_id {
+                mismatches.push(format!("{} parent differs", expected.process_id));
+            }
+        }
+        assert!(compared > 0, "no process could be compared");
+        assert!(mismatches.is_empty(), "{mismatches:#?}");
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn discovers_windows_processes_with_non_ascii_command_lines() {
+        let marker = format!("dbgjs-Grüße-{}", std::process::id());
+        let mut child = Command::new("powershell.exe")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &format!("Start-Sleep 30 # {marker}")])
+            .creation_flags(0x0800_0000)
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let child_id = child.id().unwrap();
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let processes = query_windows_processes().await;
+        child.kill().await.unwrap();
+        let child = processes
+            .unwrap()
+            .into_iter()
+            .find(|process| process.process_id == child_id)
+            .expect("the child process must be observable");
+        assert!(child.command_line.contains(&marker), "{}", child.command_line);
     }
 
     #[cfg(unix)]
@@ -1843,6 +2204,61 @@ mod tests {
     }
 
     #[test]
+    fn recognizes_copilot_sdk_bootstrap_as_node_not_vscode_main() {
+        for command in [
+            r#""Code - Insiders.exe" "C:\Program Files\Microsoft VS Code Insiders\resources\app\node_modules.asar.unpacked\@github\copilot-sdk-win32-x64\preloads\extension_bootstrap.mjs""#,
+            r#""Code - Insiders.exe" "C:/Program Files/Microsoft VS Code Insiders/resources/app/node_modules.asar.unpacked/@github/copilot-sdk-win32-x64/preloads/extension_bootstrap.mjs""#,
+        ] {
+            let sdk = process(12, 11, "Code - Insiders.exe", command);
+            assert!(!is_vscode_main_candidate(&sdk), "{command}");
+            assert!(is_node_process(&sdk), "{command}");
+            assert_eq!(process_role(&sdk), ProcessRole::Copilot);
+            let trees = vscode_process_trees(vec![
+                process(10, 1, "Code - Insiders.exe", r#""Code - Insiders.exe""#),
+                process(
+                    11,
+                    10,
+                    "Code - Insiders.exe",
+                    r#""Code - Insiders.exe" --type=utility --utility-sub-type=node.mojom.NodeService --inspect-port=0"#,
+                ),
+                sdk.clone(),
+            ]);
+            assert_eq!(trees.len(), 1);
+            assert_eq!(trees[0].root_process_id, 10);
+            assert_eq!(trees[0].processes[0].role, ProcessRole::VscodeMain);
+            assert_eq!(trees[0].processes[1].role, ProcessRole::ExtensionHost);
+            let child = &trees[0].processes[2];
+            assert_eq!(child.process_id, 12);
+            assert_eq!(child.parent_process_id, Some(11));
+            assert_eq!(child.role, ProcessRole::Copilot);
+            assert!(child.attachable);
+            assert_ne!(child.debug_target_id.as_deref(), Some("$node-root"));
+
+            let node = process_trees(vec![sdk], ProcessRootKind::Node);
+            assert_eq!(node.len(), 1);
+            assert_eq!(node[0].root_process_id, 12);
+        }
+    }
+
+    #[test]
+    fn does_not_infer_node_mode_from_arbitrary_vscode_file_paths() {
+        for path in [
+            r"C:\work\copilot\project.js",
+            r"C:\work\preloads\extension_bootstrap.mjs",
+            r"C:\work\@github\copilot-sdk-win32-x64\preloads\extension_bootstrap.mjs.txt",
+        ] {
+            let main = process(
+                10,
+                1,
+                "Code - Insiders.exe",
+                &format!(r#""Code - Insiders.exe" "{path}""#),
+            );
+            assert!(is_vscode_main_candidate(&main), "{path}");
+            assert!(!is_node_process(&main), "{path}");
+        }
+    }
+
+    #[test]
     fn recognizes_source_builds() {
         let trees = vscode_process_trees(vec![process(
             40,
@@ -1930,6 +2346,18 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![10, 11, 12, 13]
         );
+    }
+
+    #[test]
+    fn recognizes_chromium_browser_executables_across_platforms() {
+        for name in ["chrome.exe", "MSEDGE.EXE", "chrome", "google-chrome", "Google Chrome", "Microsoft Edge"] {
+            assert!(is_chromium_browser_executable(name), "{name}");
+        }
+        for name in ["Code.exe", "electron", "node", "Google Chrome Helper (Renderer)"] {
+            assert!(!is_chromium_browser_executable(name), "{name}");
+        }
+        assert!(CHROMIUM_BROWSER_EXECUTABLES.iter().all(|name| *name == name.to_ascii_lowercase()
+            && !name.ends_with(".exe")));
     }
 
     #[test]

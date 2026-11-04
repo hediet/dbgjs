@@ -99,7 +99,7 @@ try {
 			assert.equal(connected.connections[0].targets[0].targetId, "$node-root:runtime");
 			await run("--json", "target", "attach", "--context", "npm-smoke", "--target", "$node-root:runtime");
 			const result = JSON.parse(await run("--json", "target", "eval", "6 * 7", "--context", "npm-smoke", "--target", "$node-root:runtime"));
-			assert.equal(result.preview.preview, "42");
+			assert.equal(result, 42);
 			console.log(`${global ? "Global" : "Local"} installed tarballs: native binaries, shims, service startup, and Node evaluation passed.`);
 		} finally {
 			lines.close();

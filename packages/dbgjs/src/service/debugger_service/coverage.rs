@@ -12,6 +12,7 @@ impl DebuggerService {
         capture_id: Option<String>,
         command: CoveragePublicationCommand,
     ) -> Result<CoverageSnapshot, CoverageError> {
+        let _activity = self.connection_activity(&target_ref.connection).await;
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -106,6 +107,7 @@ impl CoverageApi for DebuggerService {
         _ctx: &CallCtx,
         target_ref: TargetRef,
     ) -> Result<bool, CoverageError> {
+        let _activity = self.connection_activity(&target_ref.connection).await;
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -128,6 +130,7 @@ impl CoverageApi for DebuggerService {
         target_ref: TargetRef,
         capture_id: Option<String>,
     ) -> Result<CoverageSnapshot, CoverageError> {
+        let _activity = self.connection_activity(&target_ref.connection).await;
         self.publish_coverage(
             target_ref,
             capture_id,
@@ -142,6 +145,7 @@ impl CoverageApi for DebuggerService {
         target_ref: TargetRef,
         capture_id: Option<String>,
     ) -> Result<CoverageSnapshot, CoverageError> {
+        let _activity = self.connection_activity(&target_ref.connection).await;
         self.publish_coverage(target_ref, capture_id, CoveragePublicationCommand::Stop)
             .await
     }
@@ -152,6 +156,7 @@ impl CoverageApi for DebuggerService {
         target_ref: TargetRef,
         capture_id: Option<String>,
     ) -> Result<bool, CoverageError> {
+        let _activity = self.connection_activity(&target_ref.connection).await;
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -183,6 +188,7 @@ impl CoverageApi for DebuggerService {
         source_path: Option<String>,
         no_cache: bool,
     ) -> Result<CoverageSnapshot, CoverageError> {
+        let _activity = self.connection_activity(&target_ref.connection).await;
         let TargetRef {
             connection:
                 ConnectionRef {

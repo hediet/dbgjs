@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use linkrpc::prelude::DirectoryServiceClient;
+use linkrpc::prelude::{DirectoryListParams, DirectoryServiceClient};
 use serde::{Deserialize, Serialize};
 use tokio::time::timeout;
 
@@ -128,7 +128,11 @@ async fn probe_service(
         let mut interfaces = Vec::new();
         loop {
             let listing = directory
-                .list(None, None, cursor.clone(), Some(100), None)
+                .list(DirectoryListParams {
+                    cursor: cursor.clone(),
+                    limit: Some(100),
+                    ..Default::default()
+                })
                 .await
                 .map_err(|error| LocalRpcError::Rpc(format!("{error:?}")))?;
             interfaces.extend(

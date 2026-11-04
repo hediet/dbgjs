@@ -246,15 +246,17 @@
     "typecheck": "tsc --noEmit",
     "test": "npm run typecheck && npm run compile && node --test dist/test/unit.test.cjs",
     "test:heap-streaming": "npm run typecheck && npm run compile && node --test dist/test/heapStreaming.test.cjs",
+    "test:screencast-streaming": "npm run typecheck && npm run compile && node --test dist/test/screencastStreaming.test.cjs",
     "test:vscode": "npm run compile && node test/runIntegration.mjs"
   },
   "dependencies": {
-    "@hediet/linkrpc": "0.0.3-next.20260923.1",
+    "@hediet/linkrpc": "0.0.3-next.20261008.1",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^20.17.0",
     "@types/vscode": "^1.95.0",
+    "@types/ws": "^8.18.2",
     "@vscode/debugprotocol": "^1.68.0",
     "@vscode/test-electron": "^2.5.2",
     "esbuild": "^0.25.0",

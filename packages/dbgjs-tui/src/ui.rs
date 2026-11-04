@@ -429,7 +429,7 @@ fn tone_style(tone: Tone) -> Style {
 
 #[cfg(test)]
 mod tests {
-    use dbgjs::service::context_identity::ContextKind;
+    use dbgjs::api::service_api::ContextKind;
     use dbgjs::api::service_api::{
         ConnectionConfiguration, ConnectionSnapshot, ConnectionStatus, ContextSnapshot,
         ContextSummary, SourceFormattingSettings,
@@ -442,12 +442,15 @@ mod tests {
     #[test]
     fn renders_second_row_tabs_and_connection_toggle() {
         let context = ContextSnapshot {
+            idle_timeout: Default::default(),
             agent_instance_id: "agent".to_owned(),
             id: "ctx".to_owned(),
             display_name: "Shop".to_owned(),
             revision: 1,
             resource_revision: 1,
             connections: vec![ConnectionSnapshot {
+            idle_timeout: None,
+            effective_idle_timeout: Default::default(),
                 id: "browser".to_owned(),
                 configuration: ConnectionConfiguration::DirectCdp {
                     endpoint: "ws://example".to_owned(),

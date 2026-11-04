@@ -46,6 +46,55 @@ per-user directory; custom endpoints retain their adjacent contexts file.
 Persistent-state formats, migration, and concurrent-writer semantics are not
 changed by service discovery. The `--stdio` service remains isolated.
 
+## Remote services
+
+The CLI can use a debugger service behind any LinkRPC endpoint instead of the
+local daemon, for example one running on another machine of a LinkRPC hub.
+Contexts live in a service; the CLI records which service each context lives
+in. `context create` and `set context` remember the service they used, so a
+command reaches a context's service whichever way the context is selected:
+`--context`, a cwd binding (`--set`), or a path context at or above the cwd.
+The chain is cwd (or `--context`) → context → service.
+
+Resolution order for the service: `--service-endpoint <uri>` /
+`--service-id <id>`, then `DBGJS_SERVICE_ENDPOINT` / `DBGJS_SERVICE_ID`, then
+the recorded service of the selected context, then the local daemon.
+`--service-endpoint local` forces the local daemon. A `--service-id` alone
+replaces the service id of the resolved endpoint. Local path contexts are still
+found by asking the local daemon; deleting a context drops its record.
+
+The endpoint uses LinkRPC endpoint URI syntax. Until Rust LinkRPC signs calls,
+reach a hub with `forwardChecking` through the LinkRPC CLI's proxy. It signs
+nothing by default; `--sign-as` makes it re-sign the CLI's calls with the
+LinkRPC Hub identity (or `--sign-as <principal>` for another one):
+
+```sh
+dbgjs context create :tablet "Tablet" --set \
+  --service-endpoint "cmd-stdio:?argv=linkrpc&argv=hub&argv=proxy&argv=--stdio&argv=--sign-as" \
+  --service-id hediet/tablet/dbgjs
+dbgjs process list --vscode     # lists the tablet's processes
+```
+
+To drive several machines from one directory, select the context per command
+instead of binding the cwd. `--context` may follow or precede the command:
+
+```sh
+dbgjs context create :mac "Mac" --service-endpoint "<uri>" --service-id hediet/mac/dbgjs
+dbgjs process list --vscode --context :mac     # the Mac's processes
+dbgjs --context :tablet process list --vscode  # the tablet's processes
+dbgjs process attach w:4242/1 --context :mac --set
+```
+
+On the serving machine, `dbgjs-service --hub` registers the service under the
+namespace the hub granted it (for a hub daemon service named `dbgjs`,
+`<hubServiceId>/dbgjs`) or under `--service-id`, with contexts persisted next
+to the local daemon's state as `service.hub.contexts.json`. Alternatively,
+`dbgjs-service --stdio --service-id <id>` can be served with
+`linkrpc hub proxy --claim <id> --no-outbound --target-endpoint-cmd-stdio …`.
+Process discovery for `process list` and `process attach` runs in the service,
+so it lists the serving machine's processes. Paths in commands (sources,
+launched programs, captures) also refer to the serving machine.
+
 ## Status
 
 This document defines the architecture, terminology, and required behavior of a
@@ -98,6 +147,15 @@ The first executable vertical slice now validates:
 
 Strict attachment stealing and selected-page Playwright programs are also
 implemented through the same target identities and lifecycle checks.
+
+`process attach` establishes or reuses a connection before resolving and attaching
+the requested target. If that later phase fails, the command exits nonzero,
+reports the original error and the retained connection's current state and targets,
+and supplies a scoped `target list` command. Newly created and reused connections
+are both retained; a failed attachment does not change the default target selection
+or force takeover. Errors go to stderr with empty stdout, including under `--json`;
+there is no success-shaped JSON result for a failed attachment. A failure before
+connection setup succeeds is reported as such, without claiming a usable connection.
 
 Selected Electron pages without an upstream browser-context ID receive a stable
 context ID at the Playwright proxy boundary. This client-facing identity is used
@@ -161,6 +219,39 @@ it when the connection disconnects. Browser-root Playwright programs currently
 still require a WebSocket CDP endpoint.
 
 ## Relay
+
+### Renderer recording
+
+`dbgjs target record --output <path|-> [--format mkv|webm|mp4|apng]
+[--duration-ms <ms>] [--ffmpeg <executable>] [--ffmpeg-args <json-array>]
+[target scope]` records a selected renderer through the existing target relay.
+
+- MKV is timestamped MJPEG-in-Matroska, muxed by the CLI without an encoder.
+  This is streamable, but a player must support both Matroska and MJPEG:
+  VLC plays files and live stdout pipes; browsers reject the MJPEG codec.
+- APNG (`.apng`, or `.png` so that image viewers registering only `*.png` open
+  it) requests PNG screencast frames and rewrites their chunks into an animated
+  PNG with per-frame delays, without decoding or encoding. Chrome and VS Code's
+  image preview play it. It needs file output, because the frame count is
+  patched in after recording, and every frame must share the first PNG header.
+- WebM (VP8) and MP4 (H.264/yuv420p) require an explicit external FFmpeg path.
+  dbgjs never installs, bundles, or links FFmpeg. It pipes Matroska into the
+  executable's stdin. `--ffmpeg-args` replaces preset encoding arguments with a
+  JSON array of encoding option/value pairs, not a shell command. Additional
+  input/output paths and container flags are rejected. Defaults use 25 fps
+  with one-second keyframes; MP4 also disables encoder lookahead/B-frame latency.
+- The extension infers format; a conflicting `--format` is an error.
+  An extensionless destination or binary stdout (`--output -`) requires it.
+  MP4 stdout is fragmented; file output is ordinary MP4.
+- Ctrl+C or an optional positive `--duration-ms` stops capture and finalizes
+  output. Files are staged and published without overwriting; failure removes
+  staged output. Stdout is binary-only; diagnostics use stderr. Downstream pipe
+  failure, encoder errors and capture/cleanup timeouts are reported.
+- Recording leases the selected renderer and releases the lease on completion.
+  It does not close the external application. Keep the window visible and its
+  dimensions fixed; resizing fails explicitly rather than emitting a mismatched track.
+
+### CDP transport
 
 `dbgjs context relay --stdio [--context <id>]` and
 `dbgjs target relay --stdio [target scope]` expose a context or a single
@@ -1179,6 +1270,11 @@ dbgjs events --target t-worker
 Clients should be able to resume consumption from a known revision. If requested
 history is no longer available, the agent returns an explicit history-gap error
 and a current state snapshot or revision from which to continue.
+
+Pending context observations are notified after deletion is persisted and return
+the existing context-not-found error when the context is absent. If deletion
+cannot be persisted, the context and its retained observation history remain
+available.
 
 ### 12.3 Following events
 

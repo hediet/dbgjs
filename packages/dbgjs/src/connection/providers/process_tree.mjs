@@ -1,13 +1,15 @@
 	import { execFile as execFileCallback } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { open, readFile, readdir, readlink, rm } from "node:fs/promises";
-import { basename, join, posix } from "node:path";
+import { basename, isAbsolute, join, posix } from "node:path";
 import { tmpdir } from "node:os";
 import { promisify } from "node:util";
 
 const execFile = promisify(execFileCallback);
 const rootPid = Number(required("DBGJS_PROCESS_ROOT_PID"));
 const processMode = process.env.DBGJS_PROCESS_MODE || "tree";
+// Supplied by the Rust service, which owns the list of Chromium browser executable names.
+const browserExecutables = new Set(JSON.parse(process.env.DBGJS_BROWSER_EXECUTABLES || "[]"));
 const pollIntervalMs = 2_000;
 const knownEndpoints = new Map();
 const announcedTargets = new Map();
@@ -17,6 +19,8 @@ let scanQueue = Promise.resolve();
 let running = true;
 let discoveryEnabled = false;
 let wake = () => {};
+const pendingProcessListings = new Map();
+let nextProcessListing = 0;
 
 if (!["win32", "linux", "darwin"].includes(process.platform)) {
 	throw new Error(`existing process-tree discovery is unsupported on ${process.platform}`);
@@ -31,20 +35,21 @@ if (!Number.isSafeInteger(rootPid) || rootPid <= 0) {
 main().catch(reportError);
 
 async function main() {
+	// Commands include the service's answers to process listings, which startup already needs.
+	readControlCommands();
 	const processes = await listProcesses();
 	const listeners = await listListeners(processes);
 	const root = processes.find((candidate) => candidate.pid === rootPid);
 	if (!root) {
 		throw new Error(`root process ${rootPid} does not exist`);
 	}
-	const rootEndpoint = await ensureRootEndpoint(rootPid, listeners);
+	const rootEndpoint = await ensureRootEndpoint(rootPid, listeners, root);
 	const browser = await browserForPid(rootPid, listeners);
 	process.stdout.write(`${JSON.stringify({
 		endpoint: rootEndpoint,
 		browserEndpoint: browser?.electron ? browser.endpoint : undefined,
 	})}\n`);
 
-	readControlCommands();
 	process.once("SIGINT", stop);
 	process.once("SIGTERM", stop);
 
@@ -93,6 +98,16 @@ function handleCommand(line) {
 		command = JSON.parse(line);
 	} catch (error) {
 		console.error(`ignored invalid process-tree command: ${error?.message ?? error}`);
+		return;
+	}
+	if (command?.command === "processes") {
+		const listing = pendingProcessListings.get(command.id);
+		pendingProcessListings.delete(command.id);
+		if (command.error) {
+			listing?.reject(new Error(command.error));
+		} else {
+			listing?.resolve(command.processes);
+		}
 		return;
 	}
 	if (command?.command === "setDiscovery") {
@@ -488,7 +503,7 @@ async function discoverChromiumTargets(processesInScope, allProcesses, discovere
 	return discoveries.flat();
 }
 
-async function ensureRootEndpoint(pid, listeners) {
+async function ensureRootEndpoint(pid, listeners, root) {
 	const inspector = await inspectorForPid(pid, listeners);
 	if (inspector) {
 		knownEndpoints.set(pid, inspector);
@@ -499,8 +514,81 @@ async function ensureRootEndpoint(pid, listeners) {
 		knownEndpoints.set(pid, browser.endpoint);
 		return browser.endpoint;
 	}
+	if (root && isBrowserProcess(root)) {
+		return approvalBrowserEndpoint(root, listeners);
+	}
 	// Electron's browser endpoint cannot evaluate the main-process renderer bridge.
 	return ensureInspector(pid, listeners);
+}
+
+function isBrowserProcess(candidate) {
+	const name = candidate.name.toLowerCase().replace(/\.exe$/, "");
+	return browserExecutables.has(name) && !/(?:^|\s)"?--type[=\s]/.test(candidate.commandLine);
+}
+
+/// Returns the value of `--name=value` or `--name value`. Linux reads the exact NUL-separated
+/// argv; Windows command lines are quote-aware; macOS `ps` joins argv with spaces, so an
+/// unquoted value extends to the next ` --` switch to tolerate paths containing spaces.
+async function commandLineArgument(candidate, name) {
+	if (process.platform === "linux") {
+		try {
+			const args = (await readFile(`/proc/${candidate.pid}/cmdline`, "utf8")).split("\0");
+			return argumentValue(args, name);
+		} catch {}
+	}
+	return parseCommandLineArgument(candidate.commandLine, name, process.platform);
+}
+
+function parseCommandLineArgument(commandLine, name, platform) {
+	if (platform === "win32") {
+		const args = commandLine.match(/(?:[^\s"]+|"[^"]*")+/g)?.map((arg) => arg.replaceAll('"', "")) ?? [];
+		return argumentValue(args, name);
+	}
+	const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	return new RegExp(`(?:^|\\s)${escaped}[=\\s](.+?)(?=\\s--|$)`).exec(commandLine)?.[1];
+}
+
+function argumentValue(args, name) {
+	const index = args.findIndex((arg) => arg === name || arg.startsWith(`${name}=`));
+	if (index < 0) {
+		return undefined;
+	}
+	return args[index] === name ? args[index + 1] : args[index].slice(name.length + 1);
+}
+
+async function approvalBrowserEndpoint(root, listeners) {
+	const instructions = "If the browser supports request-based remote debugging (Chrome 144+), open "
+		+ "chrome://inspect/#remote-debugging (edge://inspect in Edge), enable 'Allow remote debugging for "
+		+ "this browser instance', then retry and approve the browser's 'Allow remote debugging?' dialog.";
+	// Approval-gated browsers deliberately return 404 for /json/version and /json/list.
+	// Read only this process's explicit profile, never guess the user's normal profile.
+	const directory = await commandLineArgument(root, "--user-data-dir");
+	if (!directory || !isAbsolute(directory)) {
+		throw userFacingError(`browser process ${root.pid} has no discoverable CDP endpoint. ${instructions} `
+			+ "Automatic discovery requires an absolute --user-data-dir for a disposable profile; "
+			+ "otherwise use 'dbgjs connection add <ws-endpoint> --connection <id> --connect'.");
+	}
+	const file = join(directory, "DevToolsActivePort");
+	let contents;
+	try {
+		contents = await readFile(file, "utf8");
+	} catch (error) {
+		if (error?.code === "ENOENT") {
+			throw userFacingError(`remote debugging is off for browser process ${root.pid} (its profile has no `
+				+ `DevToolsActivePort file). ${instructions}`, { cause: error });
+		}
+		throw userFacingError(`cannot read browser endpoint ${file}: ${error.message}. ${instructions}`, { cause: error });
+	}
+	const [portText, path, ...extra] = contents.trim().split(/\r?\n/);
+	const port = Number(portText);
+	if (!/^\d+$/.test(portText) || !Number.isInteger(port) || port < 1 || port > 65535
+		|| !/^\/devtools\/browser\/[A-Za-z0-9-]+$/.test(path ?? "") || extra.length) {
+		throw userFacingError(`invalid browser endpoint in ${file}; disable and re-enable remote debugging in the browser`);
+	}
+	if (!listeners.some((listener) => listener.pid === root.pid && listener.port === port)) {
+		throw userFacingError(`browser endpoint ${file} is stale: process ${root.pid} does not own listening port ${port}. ${instructions}`);
+	}
+	return `ws://127.0.0.1:${port}${path}`;
 }
 
 async function browserForPid(pid, listeners) {
@@ -594,17 +682,13 @@ async function listProcesses() {
 		]);
 		return parseUnixProcesses(commands.stdout, names.stdout);
 	}
-	const value = await powershell(`
-		@(Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,CommandLine,CreationDate) |
-			ConvertTo-Json -Compress
-	`);
-	return asArray(value).map((candidate) => ({
-		pid: Number(candidate.ProcessId),
-		parentPid: Number(candidate.ParentProcessId),
-		name: String(candidate.Name || ""),
-		commandLine: String(candidate.CommandLine || ""),
-		creationDate: String(candidate.CreationDate || ""),
-	}));
+	// On Windows the service lists processes natively, in the form of `Get-CimInstance Win32_Process`;
+	// a PowerShell query per scan would take about a second, and much longer while WMI starts.
+	const id = ++nextProcessListing;
+	return new Promise((resolve, reject) => {
+		pendingProcessListings.set(id, { resolve, reject });
+		process.stdout.write(`${JSON.stringify({ kind: "listProcesses", id })}\n`);
+	});
 }
 
 function parseUnixProcesses(commands, names) {
@@ -739,21 +823,6 @@ async function listLinuxListeners(processes) {
 	return [...listeners.values()];
 }
 
-async function powershell(script) {
-	const { stdout } = await execFile("powershell.exe", [
-		"-NoProfile",
-		"-NonInteractive",
-		"-Command",
-		`$ErrorActionPreference = "Stop"; ${script}`,
-	], {
-		windowsHide: true,
-		maxBuffer: 16 * 1024 * 1024,
-		timeout: 30_000,
-	});
-	const text = stdout.trim();
-	return text ? JSON.parse(text) : [];
-}
-
 function processDescendants(processes, pid) {
 	const children = new Map();
 	for (const candidate of processes) {
@@ -837,10 +906,6 @@ async function poll(operation, timeoutMs) {
 	return undefined;
 }
 
-function asArray(value) {
-	return Array.isArray(value) ? value : value ? [value] : [];
-}
-
 function delay(milliseconds) {
 	return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
@@ -853,7 +918,15 @@ function required(name) {
 	return value;
 }
 
+/// An expected condition the user can act on; reported by message, without a stack trace.
+function userFacingError(message, options) {
+	const error = new Error(message, options);
+	error.userFacing = true;
+	return error;
+}
+
 function reportError(error) {
-	process.stdout.write(`${JSON.stringify({ error: String(error?.stack || error) })}\n`);
+	const message = error?.userFacing ? error.message : error?.stack || error;
+	process.stdout.write(`${JSON.stringify({ error: String(message) })}\n`);
 	process.exitCode = 1;
 }

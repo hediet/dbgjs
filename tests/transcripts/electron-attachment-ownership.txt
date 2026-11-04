@@ -8,6 +8,13 @@ reattach-after-release: created
 initialization: failed
 initialization-cleanup: attached=false
 retry-after-initialization-failure: created
+shared: first=created second=created attaches=1 sessions=2
+shared-command: session=own
+shared-event: delivered=first
+shared-release-one: attached=true sessions=1
+shared-release-all: attached=false
+shared-external-detach: closed=2
+shared-reattach-after-detach: created
 discovery-while-disabled: buffered=0
 discovery: targetCreated waiting=false attached=false
 discovery-update: targetInfoChanged

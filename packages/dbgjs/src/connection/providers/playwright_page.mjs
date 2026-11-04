@@ -2,14 +2,14 @@ import { Console } from "node:console";
 import { pathToFileURL } from "node:url";
 
 const MAX_RESULT_BYTES = 1024 * 1024;
-const DEFAULT_TIMEOUT_MS = 27_000;
-const progressEnabled = process.env.DBGJS_PLAYWRIGHT_PROGRESS === "1";
-const requestedTimeout = Number(process.env.DBGJS_PLAYWRIGHT_TIMEOUT_MS);
-const timeoutMs = Number.isFinite(requestedTimeout) && requestedTimeout > 0
-	? Math.min(requestedTimeout, DEFAULT_TIMEOUT_MS)
-	: DEFAULT_TIMEOUT_MS;
+const DEFAULT_SETUP_TIMEOUT_MS = 27_000;
+const CLOSING_TIMEOUT_MS = 2_000;
+const requestedSetupTimeout = Number(process.env.DBGJS_PLAYWRIGHT_SETUP_TIMEOUT_MS);
+const setupTimeoutMs = Number.isFinite(requestedSetupTimeout) && requestedSetupTimeout > 0
+	? Math.min(requestedSetupTimeout, DEFAULT_SETUP_TIMEOUT_MS)
+	: DEFAULT_SETUP_TIMEOUT_MS;
 const started = performance.now();
-const deadline = started + timeoutMs;
+const setupDeadline = started + setupTimeoutMs;
 
 main().catch((error) => finish({
 	ok: false,
@@ -29,23 +29,23 @@ async function main() {
 		for await (const chunk of process.stdin) program += chunk;
 		const { chromium } = await import(pathToFileURL(packagePath));
 		return { chromium, endpoint, program };
-	});
+	}, setupDeadline);
 	const browser = await runPhase("connecting", async () => {
 		try {
 			return await chromium.connectOverCDP(endpoint);
 		} catch (error) {
-			if (/page identity lookup|proxy deadline during/.test(String(error?.message))) {
+			if (/page identity lookup/.test(String(error?.message))) {
 				throw new Error(`Playwright initializing failed: ${error.message}`, { cause: error });
 			}
 			throw error;
 		}
-	}, Math.min(2_000, timeoutMs / 4));
+	}, setupDeadline);
 	let result;
 	let executionError;
 	try {
 		const pages = await runPhase("initializing", () =>
 			browser.contexts().flatMap((context) => context.pages()),
-		);
+		setupDeadline);
 		if (pages.length !== 1) {
 			throw new Error(
 				`virtual CDP endpoint exposed ${pages.length} pages; expected exactly one`,
@@ -73,13 +73,13 @@ async function main() {
 				throw new Error(`Playwright program result exceeds ${MAX_RESULT_BYTES} bytes`);
 			}
 			return JSON.parse(serialized);
-		}, Math.min(1_500, timeoutMs / 4));
+		});
 	} catch (error) {
 		executionError = error;
 	} finally {
 		delete globalThis.page;
 		try {
-			await runPhase("closing", () => browser.close());
+			await runPhase("closing", () => browser.close(), performance.now() + CLOSING_TIMEOUT_MS);
 		} catch (error) {
 			if (executionError) {
 				executionError.cleanup = error;
@@ -92,17 +92,20 @@ async function main() {
 	finish(result, 0);
 }
 
-async function runPhase(phase, operation, reserveMs = 0) {
+/**
+ * Runs one helper phase, failing it with a timeout at `deadline`. Phases without a deadline, such as
+ * the user's program, run until they settle.
+ */
+async function runPhase(phase, operation, deadline) {
 	const elapsedMs = Math.round(performance.now() - started);
-	if (progressEnabled) {
-		process.stderr.write(`DBGJS_PLAYWRIGHT_PROGRESS:${JSON.stringify({ phase, elapsedMs })}\n`);
-	}
-	const remaining = Math.max(0, deadline - performance.now() - reserveMs);
+	const remaining = deadline === undefined ? undefined : Math.max(0, deadline - performance.now());
 	if (remaining === 0) throw new PhaseError(phase, "timeout", `Playwright ${phase} exceeded its deadline after ${elapsedMs} ms`);
 	let timer;
 	try {
+		const operationResult = Promise.resolve().then(operation);
+		if (remaining === undefined) return await operationResult;
 		return await Promise.race([
-			Promise.resolve().then(operation),
+			operationResult,
 			new Promise((_, reject) => {
 				timer = setTimeout(
 					() => reject(new PhaseError(phase, "timeout",

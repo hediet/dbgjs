@@ -3,7 +3,7 @@ import { execFile as execFileCallback, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdtemp, open, readFile, readdir, readlink, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, join, posix } from "node:path";
+import { basename, isAbsolute, join, posix } from "node:path";
 import { test } from "node:test";
 import { promisify } from "node:util";
 
@@ -12,20 +12,143 @@ const source = (await readFile(new URL("../packages/dbgjs/src/connection/provide
 	.replace('const rootPid = Number(required("DBGJS_PROCESS_ROOT_PID"));', "const rootPid = testRootPid;")
 	.replace("main().catch(reportError);", "");
 
+// The service passes its browser list to the helper; read that same Rust list here.
+const rustDiscovery = await readFile(new URL("../packages/dbgjs/src/connection/discovery/process_discovery.rs", import.meta.url), "utf8");
+const browserExecutables = [.../CHROMIUM_BROWSER_EXECUTABLES: &\[&str\] = &\[([^\]]*)\]/.exec(rustDiscovery)[1]
+	.matchAll(/"([^"]+)"/g)].map((match) => match[1]);
+process.env.DBGJS_BROWSER_EXECUTABLES = JSON.stringify(browserExecutables);
+
 function helper(rootPid = process.pid, overrides = {}) {
 	return new Function(
 		"execFileCallback", "randomUUID", "open", "readFile", "readdir", "readlink", "rm",
-		"basename", "join", "posix", "tmpdir", "promisify", "testRootPid", "overrides",
+		"basename", "isAbsolute", "join", "posix", "tmpdir", "promisify", "testRootPid", "overrides",
 		`${source}
 		if (overrides.fetchJson) fetchJson = overrides.fetchJson;
 		if (overrides.ensureInspector) ensureInspector = overrides.ensureInspector;
+		if (overrides.commandLineArgument) commandLineArgument = overrides.commandLineArgument;
+		if (overrides.listProcesses) listProcesses = overrides.listProcesses;
 		return { parseUnixProcesses, parseLsofListeners, parseLinuxTcpListeners,
-			isNodeProcess, listProcesses, listListeners, ensureRootEndpoint, ensureInspector,
+			isNodeProcess, isBrowserProcess, parseCommandLineArgument, argumentValue,
+			listProcesses, listListeners, ensureRootEndpoint, ensureInspector,
 			processInstanceId, electronFusePath, electronInspectorFuseEnabled,
-			assertElectronInspectorSignalSupported };`,
+			assertElectronInspectorSignalSupported, handleCommand };`,
 	)(execFileCallback, randomUUID, open, readFile, readdir, readlink, rm,
-		basename, join, posix, tmpdir, promisify, rootPid, overrides);
+		basename, isAbsolute, join, posix, tmpdir, promisify, rootPid, overrides);
 }
+
+/// On Windows the provider asks the dbgjs service for processes; tests that need real processes
+/// answer for it with the CIM query whose form the service reproduces.
+async function cimProcesses() {
+	const { stdout } = await promisify(execFileCallback)("powershell.exe", [
+		"-NoProfile", "-NonInteractive", "-Command",
+		"@(Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,CommandLine,CreationDate) | ConvertTo-Json -Compress",
+	], { windowsHide: true, maxBuffer: 16 * 1024 * 1024, timeout: 60_000 });
+	return JSON.parse(stdout).map((candidate) => ({
+		pid: Number(candidate.ProcessId),
+		parentPid: Number(candidate.ParentProcessId),
+		name: String(candidate.Name || ""),
+		commandLine: String(candidate.CommandLine || ""),
+		creationDate: String(candidate.CreationDate || ""),
+	}));
+}
+
+test("on Windows the service answers process listings", { skip: process.platform !== "win32" }, async () => {
+	const api = helper();
+	const written = [];
+	const write = process.stdout.write;
+	process.stdout.write = (line) => written.push(String(line));
+	let listing;
+	try {
+		listing = api.listProcesses();
+	} finally {
+		process.stdout.write = write;
+	}
+	const request = JSON.parse(written.join(""));
+	assert.equal(request.kind, "listProcesses");
+	const processes = [{ pid: 4, parentPid: 0, name: "System", commandLine: "", creationDate: "/Date(1)/" }];
+	api.handleCommand(JSON.stringify({ command: "processes", id: request.id, processes }));
+	assert.deepEqual(await listing, processes);
+
+	process.stdout.write = (line) => written.push(String(line));
+	try {
+		listing = api.listProcesses();
+	} finally {
+		process.stdout.write = write;
+	}
+	const failed = JSON.parse(written.at(-1));
+	api.handleCommand(JSON.stringify({ command: "processes", id: failed.id, error: "query failed" }));
+	await assert.rejects(listing, /query failed/);
+});
+
+test("browser roots are recognized from the shared list on every platform", () => {
+	const api = helper();
+	assert.ok(browserExecutables.length > 10);
+	for (const name of ["chrome.exe", "MSEDGE.EXE", "chrome", "google-chrome", "chromium-browser",
+		"Google Chrome", "Google Chrome Canary", "Microsoft Edge", "Brave Browser"]) {
+		assert.equal(api.isBrowserProcess({ name, commandLine: name }), true, name);
+	}
+	assert.equal(api.isBrowserProcess({ name: "Google Chrome Helper (Renderer)", commandLine: "--type=renderer" }), false);
+	assert.equal(api.isBrowserProcess({ name: "chrome.exe", commandLine: 'chrome.exe "--type=gpu-process"' }), false);
+	for (const name of ["Code.exe", "electron", "node", "Code - OSS"]) {
+		assert.equal(api.isBrowserProcess({ name, commandLine: name }), false, name);
+	}
+});
+
+test("--user-data-dir parsing follows each platform's command-line representation", () => {
+	const api = helper();
+	const parse = (commandLine, platform) => api.parseCommandLineArgument(commandLine, "--user-data-dir", platform);
+	assert.equal(parse('"C:\\Program Files\\chrome.exe" --user-data-dir="C:\\a b\\p" --no-first-run', "win32"), "C:\\a b\\p");
+	assert.equal(parse('chrome.exe "--user-data-dir=C:\\a b\\p"', "win32"), "C:\\a b\\p");
+	assert.equal(parse("chrome.exe --user-data-dir C:\\p", "win32"), "C:\\p");
+	const app = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+	assert.equal(parse(`${app} --user-data-dir=/Users/me/Demo Profile --no-first-run about:blank`, "darwin"),
+		"/Users/me/Demo Profile");
+	assert.equal(parse(`${app} --user-data-dir=/Users/me/Demo Profile`, "darwin"), "/Users/me/Demo Profile");
+	assert.equal(parse(`${app} --no-first-run`, "darwin"), undefined);
+	assert.equal(api.argumentValue(["/opt/google/chrome/chrome", "--user-data-dir=/tmp/a b", ""], "--user-data-dir"), "/tmp/a b");
+	assert.equal(api.argumentValue(["chrome", "--user-data-dir", "/tmp/a b"], "--user-data-dir"), "/tmp/a b");
+});
+
+test("approval-gated Chrome discovers only its explicit profile and owned listener", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "dbgjs chrome profile "));
+	const file = join(directory, "DevToolsActivePort");
+	const api = helper(42, {
+		fetchJson: async () => undefined,
+		ensureInspector: async () => assert.fail("never activate a Node inspector in Chrome"),
+		commandLineArgument: async (candidate, name) => api.parseCommandLineArgument(candidate.commandLine, name, "win32"),
+	});
+	const listeners = [{ pid: 42, port: 9222 }];
+	const root = { pid: 42, name: "chrome.exe" };
+	try {
+		await writeFile(file, "9222\r\n/devtools/browser/abc-123\r\n");
+		for (const commandLine of [
+			`chrome.exe --user-data-dir="${directory}"`,
+			`chrome.exe "--user-data-dir=${directory}"`,
+			`chrome.exe --user-data-dir "${directory}"`,
+		]) {
+			assert.equal(await api.ensureRootEndpoint(42, listeners, { ...root, commandLine }),
+				"ws://127.0.0.1:9222/devtools/browser/abc-123");
+		}
+		root.commandLine = `chrome.exe --user-data-dir="${directory}"`;
+		await assert.rejects(api.ensureRootEndpoint(42, [{ pid: 99, port: 9222 }], root), /does not own/);
+		for (const contents of ["0\n/devtools/browser/id", "65536\n/devtools/browser/id",
+			"9222\n//other-host/path", "9222\n/devtools/browser/id?query", "9222\n/devtools/browser/id\nextra"]) {
+			await writeFile(file, contents);
+			await assert.rejects(api.ensureRootEndpoint(42, listeners, root), /invalid browser endpoint/);
+		}
+		await rm(file);
+		await assert.rejects(api.ensureRootEndpoint(42, listeners, root), (error) => {
+			assert.match(error.message, /^remote debugging is off for browser process 42 .*chrome:\/\/inspect/);
+			assert.equal(error.userFacing, true);
+			return true;
+		});
+		for (const commandLine of ["chrome.exe", "chrome.exe --user-data-dir=relative"]) {
+			await assert.rejects(api.ensureRootEndpoint(42, listeners, { ...root, commandLine }), /absolute --user-data-dir/);
+		}
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+});
 
 test("Electron with browser-only CDP activates the main-process inspector, not the browser endpoint", async () => {
 	const listeners = [{ pid: 42, port: 1234 }];
@@ -173,7 +296,7 @@ test("discovers and connects to the inspector owned by a real process", { timeou
 			});
 			child.once("exit", (code) => reject(new Error(`inspected child exited: ${code}`)));
 		});
-		const api = helper(child.pid);
+		const api = helper(child.pid, process.platform === "win32" ? { listProcesses: cimProcesses } : {});
 		const processes = await api.listProcesses();
 		const childProcess = processes.find((candidate) => candidate.pid === child.pid);
 		assert.ok(childProcess);

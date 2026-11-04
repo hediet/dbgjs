@@ -22,7 +22,7 @@ function runProgram(program, phase, timeoutMs = 10_000) {
 			DBGJS_PLAYWRIGHT_ENDPOINT: "mock:playwright-page",
 			DBGJS_PLAYWRIGHT_PACKAGE: packagePath,
 			...(phase ? { DBGJS_FIXTURE_PHASE: phase } : {}),
-			DBGJS_PLAYWRIGHT_TIMEOUT_MS: String(timeoutMs),
+			DBGJS_PLAYWRIGHT_SETUP_TIMEOUT_MS: String(timeoutMs),
 		},
 	});
 	assert.ifError(child.error);
@@ -36,7 +36,6 @@ function runProgram(program, phase, timeoutMs = 10_000) {
 
 for (const [phase, program] of [
 	["connecting", "return 1"],
-	["executing", "await new Promise(() => setInterval(() => {}, 1000))"],
 	["closing", "return 1"],
 ]) {
 	test(`${phase} stall reports its phase instead of waiting for the outer watchdog`, () => {
@@ -46,6 +45,19 @@ for (const [phase, program] of [
 		assert.match(output.result.error, /deadline|limit|timed out/i);
 	});
 }
+
+test("the program may run past the setup deadline", () => {
+	const output = runProgram(
+		"await new Promise((resolve) => setTimeout(resolve, 900)); return \"finished\"",
+		undefined,
+		300,
+	);
+	assert.deepEqual(output, {
+		status: 0,
+		result: { ok: true, hasValue: true, value: "finished" },
+		stderr: "",
+	});
+});
 
 test("cleanup failure after a successful program is attributed to closing", () => {
 	const output = runProgram("return { success: true }", "closing", 450);
@@ -87,13 +99,16 @@ for (const [expression, message] of [
 	}
 }
 
-test("closing is bounded even when execution consumed its budget", () => {
-	const output = runProgram('await new Promise(() => setInterval(() => {}, 1000))', "closing", 450);
+test("closing is bounded after a program that outlived the setup deadline", () => {
+	const output = runProgram(
+		"await new Promise((resolve) => setTimeout(resolve, 600)); return 1",
+		"closing",
+		300,
+	);
 	assert.equal(output.status, 1);
-	assert.match(output.result.error, /executing.*deadline/);
 	assert.match(output.result.error, /closing.*deadline/);
-	assert.equal(output.result.failure.phase, "executing");
-	assert.equal(output.result.failure.cleanup.kind, "timeout");
+	assert.equal(output.result.failure.phase, "closing");
+	assert.equal(output.result.failure.kind, "timeout");
 });
 
 test("immediate proxy setup errors reach the caller without waiting for the deadline", () => {
@@ -118,13 +133,9 @@ test("proxy identity failure is attributed to initialization", () => {
 });
 
 test("timeout diagnostic does not include code or capability endpoint", () => {
-	const output = runProgram(
-		'await new Promise(() => setInterval(() => {}, 1000)); return "private-document-value"',
-		undefined,
-		450,
-	);
+	const output = runProgram('return "private-document-value"', "connecting", 450);
 	assert.equal(output.status, 1);
-	assert.match(output.result.error, /executing.*deadline/);
+	assert.match(output.result.error, /connecting.*deadline/);
 	assert.doesNotMatch(output.result.error, /private-document-value|mock:playwright-page/);
 });
 

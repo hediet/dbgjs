@@ -2,12 +2,15 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use rayon::prelude::*;
 use sha2::{Digest, Sha256};
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
+mod owned_values;
+mod screencast;
+use crate::api::value::{DescribeOptions, ValueDescription, ValueOperation};
 
 use crate::capture::cpu::{
     CpuProfileFunctionKey, cpu_profile_function, cpu_profile_function_key,
@@ -83,6 +86,9 @@ pub struct TargetBreakpointSpec {
 
 #[derive(Clone)]
 pub struct TargetDebuggerHandle {
+    idle_disconnect_blocked: Arc<AtomicBool>,
+    raw_cdp_channel: Option<linkrpc::connection::channel::Channel>,
+    raw_cdp_requests: Arc<AtomicUsize>,
     commands: mpsc::Sender<TargetCommand>,
     snapshots: watch::Receiver<TargetDebuggerSnapshot>,
     pause_events: broadcast::Sender<TargetDebuggerSnapshot>,
@@ -90,6 +96,14 @@ pub struct TargetDebuggerHandle {
     heap_snapshot_progress: watch::Receiver<Option<crate::debugger::cdp_runtime::HeapSnapshotStreamProgress>>,
     raw_events: broadcast::Sender<crate::debugger::cdp_runtime::RawCdpEvent>,
     raw_event_history: Arc<std::sync::Mutex<Vec<crate::debugger::cdp_runtime::RawCdpEvent>>>,
+}
+
+struct RawCdpActivity<'a>(&'a AtomicUsize);
+
+impl Drop for RawCdpActivity<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 impl TargetDebuggerHandle {
@@ -143,6 +157,9 @@ impl TargetDebuggerHandle {
         let (_, heap_snapshot_progress) = watch::channel(None);
         let (raw_events, _) = broadcast::channel(1);
         Self {
+            idle_disconnect_blocked: Arc::new(AtomicBool::new(false)),
+            raw_cdp_channel: None,
+            raw_cdp_requests: Arc::new(AtomicUsize::new(0)),
             commands,
             snapshots,
             pause_events,
@@ -172,6 +189,7 @@ impl TargetDebuggerHandle {
             source_model,
             format!("{connection_id}/{target_id}"),
         );
+        let raw_cdp_channel = session.raw_channel();
         let mut driver = DebuggerDriver::new(
             Arc::new(DebuggerState::before_connection_generation(
                 connection_generation,
@@ -202,6 +220,7 @@ impl TargetDebuggerHandle {
         let (snapshot_sender, snapshots) = watch::channel(initial);
         let (pause_events, _) = broadcast::channel(COMMAND_BUFFER);
         let (commands, command_receiver) = mpsc::channel(COMMAND_BUFFER);
+        let idle_disconnect_blocked = Arc::new(AtomicBool::new(false));
         tokio::spawn(run_target(
             context_id,
             connection_id,
@@ -212,8 +231,12 @@ impl TargetDebuggerHandle {
             command_receiver,
             snapshot_sender,
             pause_events.clone(),
+            idle_disconnect_blocked.clone(),
         ));
         Ok(Self {
+            idle_disconnect_blocked,
+            raw_cdp_channel: Some(raw_cdp_channel),
+            raw_cdp_requests: Arc::new(AtomicUsize::new(0)),
             commands,
             snapshots,
             pause_events,
@@ -237,6 +260,12 @@ impl TargetDebuggerHandle {
 
     pub fn snapshot(&self) -> TargetDebuggerSnapshot {
         self.snapshots.borrow().clone()
+    }
+
+    pub(crate) fn blocks_idle_disconnect(&self) -> bool {
+        self.idle_disconnect_blocked.load(Ordering::SeqCst)
+            || self.raw_cdp_requests.load(Ordering::SeqCst) != 0
+            || self.snapshots.borrow().pause.is_some()
     }
 
     pub async fn set_breakpoint(
@@ -406,26 +435,21 @@ impl TargetDebuggerHandle {
         method: String,
         params: serde_json::Value,
     ) -> Result<serde_json::Value, linkrpc::prelude::JsonRpcError> {
-        let (response, receiver) = oneshot::channel();
-        self.commands
-            .send(TargetCommand::RawCdpRequest {
-                method,
-                params,
-                response,
-            })
-            .await
-            .map_err(|_| {
-                linkrpc::prelude::JsonRpcError::new(
-                    linkrpc::prelude::error_codes::PEER_DISCONNECTED,
-                    "target debugger stopped before CDP request was sent",
-                )
-            })?;
-        receiver.await.map_err(|_| {
-            linkrpc::prelude::JsonRpcError::new(
+        let channel = self.raw_cdp_channel.as_ref().filter(|_| !self.commands.is_closed())
+            .ok_or_else(|| linkrpc::prelude::JsonRpcError::new(
                 linkrpc::prelude::error_codes::PEER_DISCONNECTED,
-                "target debugger stopped before CDP response arrived",
-            )
-        })?
+                "target debugger stopped before CDP request was sent",
+            ))?;
+        self.raw_cdp_requests.fetch_add(1, Ordering::SeqCst);
+        let _activity = RawCdpActivity(&self.raw_cdp_requests);
+        // Awaited evaluations and screencast acknowledgements must not block one another
+        // or wait for debugger source processing on the command actor.
+        tokio::time::timeout(RAW_CDP_TIMEOUT, channel.call(&method, params))
+            .await
+            .map_err(|_| linkrpc::prelude::JsonRpcError::new(
+                linkrpc::prelude::error_codes::REQUEST_TIMEOUT,
+                format!("raw CDP request '{method}' timed out after 30 seconds"),
+            ))?
     }
 
     pub async fn inspect_value(
@@ -446,6 +470,38 @@ impl TargetDebuggerHandle {
             .await
             .map_err(|_| TargetDebuggerError::Stopped)?;
         receiver.await.map_err(|_| TargetDebuggerError::Stopped)?
+    }
+
+    pub async fn value_operation(
+        &self,
+        mut operation: ValueOperation,
+        options: DescribeOptions,
+        timeout_ms: u64,
+    ) -> Result<ValueDescription, TargetDebuggerError> {
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms.min(86_400_000));
+        let mut waiting = matches!(operation, ValueOperation::Await { .. }
+            | ValueOperation::Evaluate { await_result: true, .. });
+        loop {
+            let awaited_reference = match &operation {
+                ValueOperation::Await { reference } => Some(reference.clone()),
+                _ => None,
+            };
+            let (response, receiver) = oneshot::channel();
+            self.commands.send(TargetCommand::OwnedValue {
+                operation, options: options.clone(), response,
+            }).await.map_err(|_| TargetDebuggerError::Stopped)?;
+            let value = receiver.await.map_err(|_| TargetDebuggerError::Stopped)??;
+            if value.kind == "promise" && awaited_reference.as_ref().is_some_and(|reference| value.reference.as_ref() != Some(reference)) {
+                return Ok(value);
+            }
+            waiting |= value.kind == "evaluation";
+            if !waiting || value.state.as_deref() != Some("pending") || tokio::time::Instant::now() >= deadline {
+                return Ok(value);
+            }
+            let reference = value.reference.clone().ok_or_else(|| TargetDebuggerError::Evaluation("pending value has no reference".into()))?;
+            operation = ValueOperation::Await { reference };
+            tokio::time::sleep_until((tokio::time::Instant::now() + Duration::from_millis(20)).min(deadline)).await;
+        }
     }
 
     pub async fn source_content(
@@ -1088,6 +1144,11 @@ impl BreakpointOwnership {
 }
 
 enum TargetCommand {
+    OwnedValue {
+        operation: ValueOperation,
+        options: DescribeOptions,
+        response: oneshot::Sender<Result<ValueDescription, TargetDebuggerError>>,
+    },
     SetBreakpoints {
         lifetime: BreakpointLifetime,
         breakpoints: Vec<TargetBreakpointSpec>,
@@ -1134,11 +1195,6 @@ enum TargetCommand {
         pause_epoch: Option<u64>,
         object_id: String,
         response: oneshot::Sender<Result<Vec<VariableSnapshot>, TargetDebuggerError>>,
-    },
-    RawCdpRequest {
-        method: String,
-        params: serde_json::Value,
-        response: oneshot::Sender<Result<serde_json::Value, linkrpc::prelude::JsonRpcError>>,
     },
     InspectValue {
         pause_epoch: Option<u64>,
@@ -1311,8 +1367,10 @@ async fn run_target(
     mut commands: mpsc::Receiver<TargetCommand>,
     snapshots: watch::Sender<TargetDebuggerSnapshot>,
     pause_events: broadcast::Sender<TargetDebuggerSnapshot>,
+    idle_disconnect_blocked: Arc<AtomicBool>,
 ) {
     let mut breakpoint_owners = BTreeMap::<String, BreakpointOwnership>::new();
+    let mut owned_values = owned_values::OwnedValues::default();
     let mut coverage = None::<CoverageRecording>;
     let mut coverage_objects = BTreeMap::<String, CoverageSnapshot>::new();
     let mut completed_recordings = BTreeMap::<String, CoverageRecording>::new();
@@ -1324,6 +1382,7 @@ async fn run_target(
     let mut heap_graphs = BTreeMap::<String, Arc<HeapGraph>>::new();
     let mut heap_aliases = BTreeMap::<(String, String), String>::new();
     loop {
+        idle_disconnect_blocked.store(coverage.is_some() || cpu_profile.is_some(), Ordering::SeqCst);
         enum Next {
             Command(Option<TargetCommand>),
             Event(Result<bool, DebuggerDriverError>),
@@ -1333,7 +1392,14 @@ async fn run_target(
             command = commands.recv() => Next::Command(command),
             event = driver.process_next_event() => Next::Event(event),
         };
+        if matches!(&next, Next::Command(Some(_))) {
+            idle_disconnect_blocked.store(true, Ordering::SeqCst);
+        }
         match next {
+            Next::Command(Some(TargetCommand::OwnedValue { operation, options, response })) => {
+                let result = owned_values.execute(&mut driver, &session_key, operation, &options).await;
+                let _ = response.send(result);
+            }
             Next::Command(Some(TargetCommand::SetBreakpoints {
                 lifetime,
                 breakpoints,
@@ -1424,23 +1490,6 @@ async fn run_target(
                 if let Ok(snapshot) = &result {
                     publish_snapshot(&snapshots, &pause_events, snapshot.clone());
                 }
-                let _ = response.send(result);
-            }
-            Next::Command(Some(TargetCommand::RawCdpRequest {
-                method,
-                params,
-                response,
-            })) => {
-                let result =
-                    tokio::time::timeout(RAW_CDP_TIMEOUT, driver.raw_cdp_request(&method, params))
-                        .await
-                        .map_err(|_| {
-                            linkrpc::prelude::JsonRpcError::new(
-                                linkrpc::prelude::error_codes::REQUEST_TIMEOUT,
-                                "raw CDP request timed out after 30 seconds",
-                            )
-                        })
-                        .and_then(|result| result);
                 let _ = response.send(result);
             }
             Next::Command(Some(TargetCommand::RemoveBreakpoint {
@@ -2488,19 +2537,22 @@ async fn run_target(
                 let _ = response.send(result);
             }
             Next::Command(None) => break,
-            Next::Event(Ok(_)) => {
-                publish_snapshot(
-                    &snapshots,
-                    &pause_events,
-                    snapshot_from_driver(
-                        &context_id,
-                        &connection_id,
-                        &target_id,
-                        connection_generation,
-                        &session_key,
-                        &driver,
-                    ),
-                );
+            Next::Event(Ok(changed)) => {
+                owned_values.invalidate(&driver).await;
+                if changed {
+                    publish_snapshot(
+                        &snapshots,
+                        &pause_events,
+                        snapshot_from_driver(
+                            &context_id,
+                            &connection_id,
+                            &target_id,
+                            connection_generation,
+                            &session_key,
+                            &driver,
+                        ),
+                    );
+                }
             }
 
             Next::Event(Err(error)) => {
@@ -2524,6 +2576,7 @@ async fn run_target(
     for capture in heap_captures.into_values() {
         let _ = tokio::fs::remove_file(capture.path).await;
     }
+    owned_values.release_all(&driver).await;
 }
 
 fn complete_source_search_batch<T>(
@@ -3030,7 +3083,11 @@ fn heap_node_snapshot(
             column: location.column,
         })
         .collect();
+    let source = heap_object_source(graph, node, capture)?;
+    let mut description = crate::capture::heap::heap_preview::heap_description(graph, node, Some(capture_id)).map_err(heap_analysis_error)?;
+    description.source = source.clone();
     Ok(HeapNodeSnapshot {
+        description: Some(description),
         reference: heap_node_reference(capture_id, summary.heap_object_id),
         node_index: node.0,
         node_type: summary.node_type.to_owned(),
@@ -3043,7 +3100,7 @@ fn heap_node_snapshot(
         outgoing_reference_count: summary.outgoing_references as u64,
         incoming_reference_count: summary.incoming_references as u64,
         locations,
-        source: heap_object_source(graph, node, capture)?,
+        source,
         immediate_dominator: dominators
             .and_then(|analysis| analysis.immediate_dominator(node))
             .map(|dominator| {
@@ -5142,6 +5199,7 @@ async fn evaluate(
         true,
         crate::debugger::promise_debugging::DEFAULT_VALUE_PREVIEW_LENGTH,
         Some(OBJECT_GROUP),
+        None,
     )
     .await;
     let snapshot = match result {
@@ -5189,6 +5247,7 @@ async fn evaluate(
 struct EvaluatedRemote {
     remote: RuntimeRemoteObject,
     preview_truncated: bool,
+    container_id: Option<String>,
 }
 
 async fn evaluate_remote(
@@ -5200,6 +5259,7 @@ async fn evaluate_remote(
     allow_side_effects: bool,
     max_preview_length: u32,
     object_group: Option<&str>,
+    timeout_ms: Option<u64>,
 ) -> Result<EvaluatedRemote, TargetDebuggerError> {
     let container_expression = evaluation_container_expression(&expression);
     let result = if let Some(pause_epoch) = pause_epoch {
@@ -5215,6 +5275,7 @@ async fn evaluate_remote(
         params.return_by_value = Some(false);
         params.generate_preview = Some(false);
         params.throw_on_side_effect = Some(!allow_side_effects);
+        params.timeout = timeout_ms.map(|ms| ms as f64);
         params.object_group = object_group.map(str::to_owned);
         let evaluated = driver
             .client()
@@ -5244,6 +5305,7 @@ async fn evaluate_remote(
         params.return_by_value = Some(false);
         params.generate_preview = Some(false);
         params.throw_on_side_effect = Some(!allow_side_effects);
+        params.timeout = timeout_ms.map(|ms| ms as f64);
         params.object_group = object_group.map(str::to_owned);
         let evaluated = driver
             .client()
@@ -5278,6 +5340,17 @@ async fn evaluate_remote(
     let container_id = result.object_id.ok_or_else(|| {
         TargetDebuggerError::Evaluation("target did not return the evaluation container".to_owned())
     })?;
+    project_evaluation_container(driver, session_key, pause_epoch, container_id, max_preview_length, object_group).await
+}
+
+async fn project_evaluation_container(
+    driver: &DebuggerDriver,
+    session_key: &SessionKey,
+    pause_epoch: Option<u64>,
+    container_id: String,
+    max_preview_length: u32,
+    object_group: Option<&str>,
+) -> Result<EvaluatedRemote, TargetDebuggerError> {
     let mut projection_params =
         RuntimeCallFunctionOnParams::new(bounded_projection_function(max_preview_length));
     projection_params.object_id = Some(container_id.clone());
@@ -5314,7 +5387,7 @@ async fn evaluate_remote(
             "target did not return the bounded evaluation envelope".to_owned(),
         )
     })?;
-    let projection =
+    let mut projection =
         get_object_property_descriptors(driver, session_key, pause_epoch, envelope_id.clone())
             .await
             .and_then(|(properties, _)| evaluated_remote_from_envelope(&properties));
@@ -5326,6 +5399,10 @@ async fn evaluate_remote(
             (Ok(_), Err(error)) | (Err(error), _) => Err(error),
         }
     } else {
+        release_evaluation_objects(driver, std::iter::once(envelope_id)).await?;
+        if let Ok(value) = &mut projection {
+            value.container_id = Some(container_id);
+        }
         projection
     }
 }
@@ -5450,6 +5527,7 @@ fn evaluated_remote_from_envelope(
         return Ok(EvaluatedRemote {
             remote: value.clone(),
             preview_truncated: false,
+            container_id: None,
         });
     }
     let mut remote = match kind {
@@ -5492,6 +5570,7 @@ fn evaluated_remote_from_envelope(
     }
     Ok(EvaluatedRemote {
         remote,
+        container_id: None,
         preview_truncated: property("__dbgjsTruncated")
             .and_then(|value| value.value.as_ref())
             .and_then(serde_json::Value::as_bool)
@@ -5605,6 +5684,7 @@ async fn inspect_value(
                 allow_side_effects,
                 options.max_preview_length,
                 object_group,
+                None,
             )
             .await?;
             (
@@ -6894,6 +6974,73 @@ mod tests {
     use std::collections::BTreeMap;
     use std::sync::Arc;
 
+    #[tokio::test]
+    async fn raw_cdp_requests_are_concurrent_without_polling_debugger_commands() {
+        use linkrpc::connection::channel::{Channel, RejectingHandler};
+        use linkrpc::prelude::{JsonRpcMessage, MessageTransport};
+        use linkrpc::protocol::jsonrpc::{JsonRpcResponse, ResponsePayload};
+        use linkrpc::transport::memory::transport_pair_of;
+        use serde_json::json;
+
+        let (transport, browser) = transport_pair_of();
+        let channel = Channel::new(Box::new(transport), Box::new(RejectingHandler));
+        let task = tokio::spawn({
+            let channel = channel.clone();
+            async move { channel.run().await }
+        });
+        let mut handle = TargetDebuggerHandle::stub_for_tests(
+            target_snapshot(TargetDebuggerPhase::Running),
+        );
+        let (commands, mut receiver) = tokio::sync::mpsc::channel(1);
+        handle.commands = commands;
+        handle.raw_cdp_channel = Some(channel);
+
+        let mut first = Box::pin(handle.raw_cdp_request(
+            "Runtime.evaluate".into(),
+            json!({"expression": "pendingPromise", "awaitPromise": true}),
+        ));
+        assert!(futures_util::poll!(first.as_mut()).is_pending());
+        let JsonRpcMessage::Request(first_request) = tokio::time::timeout(
+            Duration::from_secs(1), browser.recv(),
+        ).await.unwrap().unwrap() else {
+            panic!("expected first raw request");
+        };
+        let mut second = Box::pin(handle.raw_cdp_request(
+            "Page.screencastFrameAck".into(),
+            json!({"sessionId": 1}),
+        ));
+        assert!(futures_util::poll!(second.as_mut()).is_pending());
+        let JsonRpcMessage::Request(second_request) = tokio::time::timeout(
+            Duration::from_secs(1), browser.recv(),
+        ).await.unwrap().unwrap() else {
+            panic!("expected concurrent acknowledgement before the evaluation resolves");
+        };
+        assert!(receiver.try_recv().is_err(), "raw requests must bypass the actor");
+        assert!(handle.blocks_idle_disconnect());
+        assert_eq!(handle.raw_cdp_requests.load(std::sync::atomic::Ordering::SeqCst), 2);
+
+        for (request, result) in [(second_request, json!({})), (first_request, json!({"value": 42}))] {
+            browser.send(JsonRpcMessage::Response(JsonRpcResponse {
+                id: Some(request.id),
+                payload: ResponsePayload::Result(result),
+            })).await.unwrap();
+        }
+        assert_eq!(tokio::time::timeout(Duration::from_secs(1), second).await.unwrap().unwrap(), json!({}));
+        assert!(handle.blocks_idle_disconnect());
+        assert_eq!(tokio::time::timeout(Duration::from_secs(1), first).await.unwrap().unwrap(), json!({"value": 42}));
+        assert!(!handle.blocks_idle_disconnect());
+
+        let mut cancelled = Box::pin(handle.raw_cdp_request("Runtime.evaluate".into(), json!({})));
+        assert!(futures_util::poll!(cancelled.as_mut()).is_pending());
+        assert!(handle.blocks_idle_disconnect());
+        drop(cancelled);
+        assert!(!handle.blocks_idle_disconnect(), "cancellation must release activity");
+        drop(receiver);
+        let error = handle.raw_cdp_request("Runtime.evaluate".into(), json!({})).await.unwrap_err();
+        assert_eq!(error.code, linkrpc::prelude::error_codes::PEER_DISCONNECTED);
+        task.abort();
+    }
+
     #[test]
     fn breakpoint_lifetimes_keep_context_revisions_separate_from_target_generation() {
         let context = BreakpointLifetime::ContextIntent;
@@ -7047,7 +7194,7 @@ mod tests {
         }
     }
 
-    fn target_snapshot(phase: TargetDebuggerPhase) -> TargetDebuggerSnapshot {
+    pub(super) fn target_snapshot(phase: TargetDebuggerPhase) -> TargetDebuggerSnapshot {
         TargetDebuggerSnapshot {
             context_id: "test".to_owned(),
             connection_id: "browser".to_owned(),

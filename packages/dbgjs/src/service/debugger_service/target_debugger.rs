@@ -1,4 +1,5 @@
 use super::*;
+use crate::api::value::{DescribeOptions, ValueDescription, ValueOperation};
 
 #[async_trait::async_trait]
 impl TargetDebuggerApi for DebuggerService {
@@ -18,6 +19,7 @@ impl TargetDebuggerApi for DebuggerService {
         target_ref: TargetRef,
         options: TargetAttachOptions,
     ) -> Result<TargetAttachmentResult, TargetError> {
+        let _activity = self.connection_activity(&target_ref.connection).await;
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -26,7 +28,7 @@ impl TargetDebuggerApi for DebuggerService {
                 },
             target_id,
         } = target_ref;
-        let _relay_lifecycle_guard = self.relay_lifecycle_lock.lock().await;
+        let _relay_lifecycle_guard = self.relay_lifecycle_lock.read().await;
         ensure_context_not_relayed(&*self.state.lock().await, &context_id)?;
         self.attach_target_internal(ctx, context_id, connection_id, target_id, options)
             .await
@@ -114,6 +116,7 @@ impl TargetDebuggerApi for DebuggerService {
         predicate: TargetWaitPredicate,
         timeout_ms: u64,
     ) -> Result<TargetDebuggerSnapshot, TargetError> {
+        let _activity = self.connection_activity(&target_ref.connection).await;
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -164,6 +167,7 @@ impl TargetDebuggerApi for DebuggerService {
         _ctx: &CallCtx,
         target_ref: TargetRef,
     ) -> Result<TargetDebuggerSnapshot, TargetError> {
+        let _activity = self.connection_activity(&target_ref.connection).await;
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -185,6 +189,7 @@ impl TargetDebuggerApi for DebuggerService {
         target_ref: TargetRef,
         expected_connection_generation: Option<u64>,
     ) -> Result<ContextSnapshot, TargetError> {
+        let _activity = self.connection_activity(&target_ref.connection).await;
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -193,13 +198,16 @@ impl TargetDebuggerApi for DebuggerService {
                 },
             target_id,
         } = target_ref;
-        let _relay_lifecycle_guard = self.relay_lifecycle_lock.lock().await;
+        let _relay_lifecycle_guard = self.relay_lifecycle_lock.read().await;
         ensure_context_not_relayed(&*self.state.lock().await, &context_id)?;
-        let _attachment_guard = self.attachment_lock.lock().await;
+        let attachment_lock = self
+            .target_attachment_lock(&context_id, &connection_id, &target_id)
+            .await?;
+        let _attachment_guard = attachment_lock.lock().await;
         let (key, debugger, runtime, attachment, attempt) = {
             let state = self.state.lock().await;
-            let target_id =
-                Self::resolve_target_id_in_state(&state, &context_id, &connection_id, &target_id)?;
+            attachment_lock.validate(&state, &context_id, &connection_id)?;
+            let target_id = attachment_lock.target_id.clone();
             let key = (context_id.clone(), connection_id.clone(), target_id.clone());
             let context = state
                 .contexts
@@ -291,6 +299,7 @@ impl TargetDebuggerApi for DebuggerService {
         target_ref: TargetRef,
         pause_epoch: u64,
     ) -> Result<TargetDebuggerSnapshot, TargetError> {
+        let _activity = self.connection_activity(&target_ref.connection).await;
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -313,6 +322,7 @@ impl TargetDebuggerApi for DebuggerService {
         pause_epoch: u64,
         kind: ApiStepKind,
     ) -> Result<TargetDebuggerSnapshot, TargetError> {
+        let _activity = self.connection_activity(&target_ref.connection).await;
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -343,6 +353,7 @@ impl TargetDebuggerApi for DebuggerService {
         frame_index: u32,
         expression: String,
     ) -> Result<EvaluationSnapshot, TargetError> {
+        let _activity = self.connection_activity(&target_ref.connection).await;
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -358,6 +369,22 @@ impl TargetDebuggerApi for DebuggerService {
             .map_err(TargetError::from)
     }
 
+    async fn value_operation(
+        &self,
+        _ctx: &CallCtx,
+        target_ref: TargetRef,
+        operation: ValueOperation,
+        options: DescribeOptions,
+        timeout_ms: u64,
+    ) -> Result<ValueDescription, TargetError> {
+        let _activity = self.connection_activity(&target_ref.connection).await;
+        self.target_debugger(
+            &target_ref.connection.context_id,
+            &target_ref.connection.connection_id,
+            &target_ref.target_id,
+        ).await?.value_operation(operation, options, timeout_ms).await.map_err(TargetError::from)
+    }
+
     async fn get_scope_variables(
         &self,
         _ctx: &CallCtx,
@@ -366,6 +393,7 @@ impl TargetDebuggerApi for DebuggerService {
         frame_index: u32,
         scope_index: u32,
     ) -> Result<Vec<VariableSnapshot>, TargetError> {
+        let _activity = self.connection_activity(&target_ref.connection).await;
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -388,6 +416,7 @@ impl TargetDebuggerApi for DebuggerService {
         pause_epoch: Option<u64>,
         object_id: String,
     ) -> Result<Vec<VariableSnapshot>, TargetError> {
+        let _activity = self.connection_activity(&target_ref.connection).await;
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -411,6 +440,7 @@ impl TargetDebuggerApi for DebuggerService {
         selector: ValueSelector,
         options: ValueInspectionOptions,
     ) -> Result<ValueSnapshot, TargetError> {
+        let _activity = self.connection_activity(&target_ref.connection).await;
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -436,6 +466,7 @@ impl TargetDebuggerApi for DebuggerService {
         column: u32,
         expression: String,
     ) -> Result<TargetDebuggerSnapshot, TargetError> {
+        let _activity = self.connection_activity(&target_ref.connection).await;
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -470,6 +501,7 @@ impl TargetDebuggerApi for DebuggerService {
         target_ref: TargetRef,
         logpoints: Vec<LogpointSpec>,
     ) -> Result<TargetDebuggerSnapshot, TargetError> {
+        let _activity = self.connection_activity(&target_ref.connection).await;
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -517,6 +549,7 @@ impl TargetDebuggerApi for DebuggerService {
         target_ref: TargetRef,
         logpoint_id: String,
     ) -> Result<crate::api::service_api::LogpointRemovalResult, TargetError> {
+        let _activity = self.connection_activity(&target_ref.connection).await;
         validate_id("logpoint", &logpoint_id)?;
         if logpoint_id.starts_with("log:") {
             return Err(

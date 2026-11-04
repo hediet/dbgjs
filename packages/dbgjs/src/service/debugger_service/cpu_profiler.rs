@@ -8,6 +8,7 @@ impl CpuProfilerApi for DebuggerService {
         target_ref: TargetRef,
         sampling_interval_micros: Option<u64>,
     ) -> Result<bool, CpuProfilerError> {
+        let _activity = self.connection_activity(&target_ref.connection).await;
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -30,6 +31,7 @@ impl CpuProfilerApi for DebuggerService {
         target_ref: TargetRef,
         capture_id: Option<String>,
     ) -> Result<CpuProfileSnapshot, CpuProfilerError> {
+        let _activity = self.connection_activity(&target_ref.connection).await;
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -119,6 +121,7 @@ impl CpuProfilerApi for DebuggerService {
         no_cache: bool,
         project: bool,
     ) -> Result<CpuProfileSnapshot, CpuProfilerError> {
+        let _activity = self.connection_activity(&target_ref.connection).await;
         let TargetRef {
             connection:
                 ConnectionRef {

@@ -71,6 +71,7 @@ pub struct DebuggerDriver {
     console_log: ConsoleLog,
     log_capture: LogCaptureSnapshot,
     logpoint_binding_ready: bool,
+    value_generation: u64,
 }
 
 impl DebuggerDriver {
@@ -87,11 +88,16 @@ impl DebuggerDriver {
             console_log: ConsoleLog::default(),
             log_capture: LogCaptureSnapshot::default(),
             logpoint_binding_ready: false,
+            value_generation: 0,
         }
     }
 
     pub fn state(&self) -> &Arc<DebuggerState> {
         &self.state
+    }
+
+    pub(crate) fn value_generation(&self) -> u64 {
+        self.value_generation
     }
 
     pub fn client(&self) -> &CdpClient<linkrpc::connection::channel::Channel> {
@@ -276,6 +282,10 @@ impl DebuggerDriver {
             .next_event()
             .await
             .ok_or(DebuggerDriverError::EventStreamClosed)??;
+        if matches!(&event, CdpRuntimeEvent::Other { method, .. }
+            if matches!(method.as_str(), "Runtime.executionContextDestroyed" | "Runtime.executionContextsCleared" | "Debugger.globalObjectCleared")) {
+            self.value_generation = self.value_generation.wrapping_add(1);
+        }
         let pause_epoch = match &event {
             CdpRuntimeEvent::Resumed { session } => {
                 self.state

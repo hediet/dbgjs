@@ -14,6 +14,122 @@ use dbgjs::connection::transport::local_rpc::{
 };
 
 #[test]
+fn cli_idle_timeout_preserves_default_human_output_and_shows_nondefault_policies() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let state_file = root.join("service.json");
+    let cli = PathBuf::from(env!("CARGO_BIN_EXE_dbgjs"));
+    let service = PathBuf::from(env!("CARGO_BIN_EXE_dbgjs-service"));
+    let _cleanup = ServiceCleanup::new(cli.clone(), service.clone(), state_file.clone());
+    let human = |arguments: &[&str]| {
+        let (status, stdout, stderr) = run_in_with_format(
+            &cli, &service, &state_file, root, arguments, false,
+        );
+        assert_success(arguments, status, &stdout, &stderr);
+        String::from_utf8(stdout).unwrap()
+    };
+    assert_eq!(
+        human(&["context", "create", ":human", "--set"]).trim(),
+        "Context human  rev 1\n  Name: human\n  Connections: none",
+    );
+    assert!(human(&["context", "configure", "--idle-timeout", "2h"])
+        .contains("  Idle timeout: 2h"));
+    assert!(human(&[
+        "connection", "add", "ws://127.0.0.1:9", "--connection", "browser",
+        "--idle-timeout", "inf",
+    ]).contains("Idle timeout: inf (override)"));
+    assert!(human(&[
+        "connection", "configure", "--connection", "browser", "--idle-timeout", "inherit",
+    ]).contains("Idle timeout: 2h (inherited)"));
+    run_json_in(&cli, &service, &state_file, root, &["service", "stop"]);
+    wait_until_removed(&state_file);
+}
+
+#[test]
+fn cli_idle_timeout_disconnects_independently_and_defers_coverage_recordings() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let state_file = root.join("service.json");
+    let cli = PathBuf::from(env!("CARGO_BIN_EXE_dbgjs"));
+    let service = PathBuf::from(env!("CARGO_BIN_EXE_dbgjs-service"));
+    let _cleanup = ServiceCleanup::new(cli.clone(), service.clone(), state_file.clone());
+    let program = root.join("app.cjs");
+    fs::write(&program, "setInterval(() => Math.random(), 100);\n").unwrap();
+    let created = run_json_in(&cli, &service, &state_file, root, &[
+        "context", "create", ":idle", "--idle-timeout", "inf", "--set",
+    ]);
+    assert_eq!(created["idleTimeout"]["kind"], "infinite");
+    let program = program.to_str().unwrap();
+    let first = run_json_in(&cli, &service, &state_file, root, &[
+        "connection", "add", "--node", program, "--connection", "first", "--connect",
+    ]);
+    assert_eq!(first["connections"][0]["idleTimeout"], Value::Null);
+    assert_eq!(first["connections"][0]["effectiveIdleTimeout"]["kind"], "infinite");
+    run_json_in(&cli, &service, &state_file, root, &[
+        "target", "attach", "--connection", "first", "--target", "$node-root:first", "--set",
+    ]);
+    run_json_in(&cli, &service, &state_file, root, &["target", "release", "--connection", "first"]);
+    let (status, stdout, stderr) = run_in(&cli, &service, &state_file, root, &[
+        "coverage", "start", "--connection", "first",
+    ]);
+    assert_success(&["coverage", "start"], status, &stdout, &stderr);
+    run_json_in(&cli, &service, &state_file, root, &[
+        "connection", "add", "--node", program, "--connection", "second", "--connect",
+    ]);
+    run_json_in(&cli, &service, &state_file, root, &[
+        "connection", "add", "--node", program, "--connection", "third", "--idle-timeout", "inf", "--connect",
+    ]);
+    run_json_in(&cli, &service, &state_file, root, &[
+        "context", "configure", "--idle-timeout", "500ms",
+    ]);
+    let status = |id: &str, snapshot: &Value| {
+        snapshot["connections"].as_array().unwrap().iter()
+            .find(|connection| connection["id"] == id).unwrap()["status"]["kind"]
+            .as_str().unwrap().to_owned()
+    };
+    let wait_disconnected = |id: &str| {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let snapshot = run_json_in(&cli, &service, &state_file, root, &["context", "show"]);
+            if status(id, &snapshot) == "disconnected" {
+                return snapshot;
+            }
+            assert!(Instant::now() < deadline, "{id} did not expire: {snapshot}");
+            thread::sleep(Duration::from_millis(100));
+        }
+    };
+    let snapshot = wait_disconnected("second");
+    assert_eq!(status("first", &snapshot), "connected");
+    assert_eq!(status("third", &snapshot), "connected");
+    let capture = run_json_in(&cli, &service, &state_file, root, &[
+        "coverage", "stop", "--connection", "first", "--id", "saved",
+    ]);
+    assert_eq!(capture["captureId"], "saved");
+    wait_disconnected("first");
+    let captures = run_json_in(&cli, &service, &state_file, root, &["capture", "list"]);
+    assert_eq!(captures[0]["name"], "saved");
+    run_json_in(&cli, &service, &state_file, root, &["coverage", "show", "saved"]);
+    run_json_in(&cli, &service, &state_file, root, &[
+        "connection", "configure", "--connection", "third", "--idle-timeout", "inherit",
+    ]);
+    let snapshot = wait_disconnected("third");
+    assert_eq!(snapshot["connections"][2]["idleTimeout"], Value::Null);
+    run_json_in(&cli, &service, &state_file, root, &[
+        "connection", "configure", "--connection", "third", "--idle-timeout", "inf",
+    ]);
+    let reconnected = run_json_in(&cli, &service, &state_file, root, &[
+        "connection", "connect", "--connection", "third",
+    ]);
+    assert_eq!(status("third", &reconnected), "connected");
+    assert_eq!(reconnected["connections"][2]["generation"], 2);
+    run_json_in(&cli, &service, &state_file, root, &[
+        "connection", "disconnect", "--connection", "third",
+    ]);
+    run_json_in(&cli, &service, &state_file, root, &["service", "stop"]);
+    wait_until_removed(&state_file);
+}
+
+#[test]
 fn electron_bridge_recovers_from_failed_initialization_and_enforces_ownership() {
     let output = Command::new("node")
         .arg(
@@ -867,7 +983,7 @@ fn formatted_and_raw_runtime_logpoints_bind_to_exact_executable_position() {
     let near_hits = run(&[
         "target", "eval", "JSON.stringify(mappingHits)", "--connection", "node",
     ]);
-    let text = near_hits["value"].as_str().or_else(|| near_hits["preview"]["preview"].as_str())
+    let text = near_hits.as_str()
         .unwrap_or_else(|| panic!("missing evaluation result: {near_hits}"));
     assert!(text.contains("formatted") && text.contains("raw-near"), "{text}");
     let raw_exact = run(&[
@@ -889,7 +1005,7 @@ fn formatted_and_raw_runtime_logpoints_bind_to_exact_executable_position() {
         "target", "eval",
         "JSON.stringify({mappingHits,controlHits})", "--connection", "node",
     ]);
-    let text = hits["value"].as_str().or_else(|| hits["preview"]["preview"].as_str())
+    let text = hits.as_str()
         .unwrap_or_else(|| panic!("missing evaluation result: {hits}"));
     assert!(text.contains("formatted"), "{text}");
     assert!(text.contains("raw-near"), "{text}");
@@ -901,7 +1017,7 @@ fn formatted_and_raw_runtime_logpoints_bind_to_exact_executable_position() {
     let after = run(&[
         "target", "eval", "JSON.stringify(mappingHits)", "--connection", "node",
     ]);
-    let text = after["value"].as_str().or_else(|| after["preview"]["preview"].as_str())
+    let text = after.as_str()
         .unwrap_or_else(|| panic!("missing evaluation result: {after}"));
     assert_eq!(text.matches("raw-exact").count(), 1, "{text}");
     assert!(text.matches("formatted").count() >= 3, "{text}");
@@ -1111,7 +1227,7 @@ fn cli_printed_nested_selectors_round_trip_across_operations_and_reconnect() {
             assert_eq!(shown["target"]["targetId"], target_id, "{shown}");
             let evaluated = command(&["target", "eval", "identity"]);
             assert!(
-                evaluated["preview"]["preview"]
+                evaluated
                     .as_str()
                     .unwrap()
                     .contains(target_id),
@@ -1784,6 +1900,55 @@ fn cli_persists_ordered_source_formatting_rules() {
 }
 
 #[test]
+fn process_commands_use_the_service_recorded_for_an_explicit_context() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    let state_file = root.join("service.json");
+    let cli = PathBuf::from(env!("CARGO_BIN_EXE_dbgjs"));
+    let service = PathBuf::from(env!("CARGO_BIN_EXE_dbgjs-service"));
+    let endpoint = format!(
+        "cmd-stdio:?argv={}&argv=--stdio&argv=--service-id&argv=test%2Fremote",
+        percent_encode(service.to_str().unwrap())
+    );
+    run_json_in(&cli, &service, &state_file, root, &[
+        "context", "create", ":remote", "--service-endpoint", &endpoint,
+        "--service-id", "test/remote",
+    ]);
+
+    for arguments in [
+        &["process", "list", "--root", "node", "--context", ":remote"][..],
+        &["--context", ":remote", "process", "list", "--vscode"],
+    ] {
+        assert!(run_json_in(&cli, &service, &state_file, root, arguments).is_array());
+    }
+    // Each command spawns a fresh stdio service, so `:remote` no longer exists there. Only the
+    // recorded remote service can report that; the local daemon was never started.
+    let process = format!("p:{}", std::process::id());
+    let (status, stdout, stderr) = run_in(&cli, &service, &state_file, root, &[
+        "process", "attach", &process, "--context", ":remote",
+    ]);
+    assert!(!status.success(), "{}", String::from_utf8_lossy(&stdout));
+    assert!(
+        String::from_utf8_lossy(&stderr).contains("context 'remote' does not exist"),
+        "{}",
+        String::from_utf8_lossy(&stderr)
+    );
+    assert!(!state_file.exists(), "the local daemon must not be started");
+}
+
+fn percent_encode(value: &str) -> String {
+    value
+        .bytes()
+        .map(|byte| match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                char::from(byte).to_string()
+            }
+            _ => format!("%{byte:02X}"),
+        })
+        .collect()
+}
+
+#[test]
 fn service_ensure_starts_the_shared_daemon() {
     let state_file = std::env::temp_dir().join(format!(
         "dbgjs-service-ensure-{}-{}.json",
@@ -2410,7 +2575,7 @@ fn cli_resolves_canonical_target_and_queries_capture_offline() {
             "$node-root:runtime-a",
         ],
     );
-    assert_eq!(evaluated["preview"]["preview"], "42");
+    assert_eq!(evaluated, 42);
     for selector in [
         "runtime-a/$node-root:runtime-a",
         "runtime-a/$node-root:runtime-a@1",
@@ -2456,7 +2621,7 @@ fn cli_resolves_canonical_target_and_queries_capture_offline() {
                 selector,
             ],
         );
-        assert_eq!(result["preview"]["preview"], "42");
+        assert_eq!(result, 42);
     }
     for expression in [
         "'x'.repeat(4096)",
@@ -2482,8 +2647,7 @@ fn cli_resolves_canonical_target_and_queries_capture_offline() {
         } else {
             "x".repeat(4096)
         };
-        assert_eq!(full["preview"]["preview"], expected);
-        assert_eq!(full["preview"]["truncated"], false);
+        assert_eq!(full, expected);
         assert!(!contains_reference(&full));
         let bounded = run_json(
             &cli,
@@ -2501,8 +2665,7 @@ fn cli_resolves_canonical_target_and_queries_capture_offline() {
                 "runtime-a/$node-root:runtime-a",
             ],
         );
-        assert_eq!(bounded["preview"]["preview"], &expected[..200]);
-        assert_eq!(bounded["preview"]["truncated"], true);
+        assert_eq!(bounded["$dbgjs"]["truncated"], true);
     }
     let truncated = run_human_in(
         &cli,
@@ -2512,7 +2675,7 @@ fn cli_resolves_canonical_target_and_queries_capture_offline() {
         &[
             "target",
             "eval",
-            "'x'.repeat(4096)",
+            "'x'.repeat(20000)",
             "--context",
             &context,
             "--target",
@@ -2520,7 +2683,7 @@ fn cli_resolves_canonical_target_and_queries_capture_offline() {
         ],
     );
     assert!(truncated.0.success());
-    assert!(String::from_utf8_lossy(&truncated.1).contains("--full"));
+    assert!(String::from_utf8_lossy(&truncated.1).contains("truncated"));
     run_json(
         &cli,
         &service,
@@ -3094,7 +3257,7 @@ fn cli_service_connects_to_live_cdp() {
             &target_id,
         ],
     );
-    assert_eq!(positional_eval["preview"]["preview"], "42");
+    assert_eq!(positional_eval, 42);
 
     let stdin_eval = run_json_with_stdin(
         &cli,
@@ -3113,7 +3276,7 @@ fn cli_service_connects_to_live_cdp() {
         ],
         b"40\n  + 2\n",
     );
-    assert_eq!(stdin_eval["preview"]["preview"], "42");
+    assert_eq!(stdin_eval, 42);
 
     let bounded_eval = run_json(
         &cli,

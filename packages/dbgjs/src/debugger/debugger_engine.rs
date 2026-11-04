@@ -1,5 +1,4 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use im::{OrdMap, OrdSet};
@@ -7,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::capture::content_store::ContentHash;
 use crate::source::source_view::{ContentCandidate, Position, SourceMapData};
+use crate::source::source_map_resources::local_script_file_path;
 
 const MAX_DIAGNOSTICS: usize = 1024;
 pub const MAX_BREAKPOINT_CANDIDATES: usize = 8;
@@ -2254,37 +2254,6 @@ fn comparable_file_path(value: &str) -> Option<String> {
     #[cfg(windows)]
     let normalized = normalized.to_ascii_lowercase();
     Some(normalized)
-}
-
-pub(crate) fn local_script_file_path(value: &str) -> Option<PathBuf> {
-    let path = Path::new(value);
-    if path.is_absolute() {
-        return Some(path.to_owned());
-    }
-    let url = url::Url::parse(value).ok()?;
-    match url.scheme() {
-        "file" => url.to_file_path().ok(),
-        "vscode-file" if url.host_str() == Some("vscode-app") => {
-            let decoded = percent_encoding::percent_decode_str(url.path())
-                .decode_utf8()
-                .ok()?;
-            #[cfg(windows)]
-            let decoded = decoded
-                .strip_prefix('/')
-                .filter(|path| path.as_bytes().get(1) == Some(&b':'))
-                .unwrap_or(&decoded);
-            #[cfg(not(windows))]
-            if decoded.as_bytes().get(2) == Some(&b':') {
-                return None;
-            }
-            #[cfg(windows)]
-            let path = PathBuf::from(decoded);
-            #[cfg(not(windows))]
-            let path = PathBuf::from(decoded.as_ref());
-            path.is_absolute().then_some(path)
-        }
-        _ => None,
-    }
 }
 
 fn bind_physical(

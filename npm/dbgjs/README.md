@@ -77,8 +77,12 @@ Linux requires glibc 2.35 or newer and OpenSSL 3. Intel macOS and Musl/Alpine
 are not supported. Platform dependencies must not be omitted.
 
 The package supplies Playwright's JavaScript library, but does not install a
-browser. Browser debugging requires a separately installed browser. `DBGJS_NODE`
-and `DBGJS_PLAYWRIGHT_PACKAGE` can override the runtime and Playwright module.
+browser. Browser debugging requires a separately installed browser. dbgjs runs
+its helper scripts with `node` from `PATH`; when `PATH` lacks it (for example
+in a service started by launchd or systemd), it falls back to the newest nvm,
+fnm, mise, or asdf install, then Volta, Homebrew, `/usr/local/bin`, or
+`Program Files\nodejs`. `DBGJS_NODE` and `DBGJS_PLAYWRIGHT_PACKAGE` can
+override the runtime and Playwright module.
 
 Each native package keeps `dbgjs`, `dbgjs-service`, and `dbgjs-tui` together.
 Use `dbgjs service stop` for the appropriate service instance before replacing

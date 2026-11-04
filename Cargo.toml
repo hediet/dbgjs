@@ -1,11 +1,11 @@
 [workspace]
-members = ["packages/dbgjs", "packages/cdp-protocol", "packages/dbgjs-tui", "packages/cdp-codegen"]
+members = ["packages/dbgjs", "packages/cdp-protocol", "packages/dbgjs-tui"]
 default-members = ["packages/dbgjs"]
 resolver = "3"
 
 [workspace.dependencies]
-linkrpc = "=0.3.0-next.20260923.1"
-linkrpc-tokio = "=0.3.0-next.20260923.1"
+linkrpc = "=0.3.0-next.20261022.5"
+linkrpc-tokio = "=0.3.0-next.20261022.5"
 
 [profile.dev]
 debug = 1

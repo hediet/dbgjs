@@ -1,4 +1,5 @@
 use super::*;
+use crate::connection::discovery::process_discovery::ProcessTreeConnection;
 use crate::api::service_api::{DiscoveryApi, ServiceDescription, service_description};
 
 #[async_trait::async_trait]
@@ -26,6 +27,60 @@ impl ServiceApi for DebuggerService {
             .map_err(|error| internal_error(error.to_string()))
     }
 
+    async fn discover_process_trees(
+        &self,
+        ctx: &CallCtx,
+        root_kind: Option<crate::api::service_api::ProcessRootKind>,
+        include_stats: bool,
+        include_targets: bool,
+    ) -> Result<Vec<ProcessTreeSnapshot>, JsonRpcError> {
+        use crate::connection::discovery::process_discovery;
+        let mut trees = match root_kind {
+            Some(root_kind) => {
+                process_discovery::discover_process_trees(root_kind, include_stats).await
+            }
+            None if include_stats => {
+                return Err(JsonRpcError::new(
+                    error_codes::INVALID_PARAMS,
+                    "include_stats requires a root_kind",
+                ));
+            }
+            None => process_discovery::discover_recognized_process_trees().await,
+        }
+        .map_err(|error| internal_error(error.to_string()))?;
+        if include_targets {
+            // Listing connects each root in the machine context, which keeps the connection until it is
+            // idle, so later listings and attaching to a listed target need no new connection.
+            let roots = trees
+                .iter()
+                .filter(|tree| process_discovery::targets_observable_silently(tree))
+                .map(|tree| tree.root_process_id)
+                .collect::<Vec<_>>();
+            let connected = futures_util::future::join_all(
+                roots.iter().map(|root_pid| self.ensure_machine_connection(ctx, *root_pid)),
+            )
+            .await;
+            let open = self.open_process_tree_runtimes().await;
+            let connections = roots
+                .into_iter()
+                .zip(connected)
+                .map(|(root_pid, connected)| {
+                    let connection = match (connected, open.get(&root_pid)) {
+                        (Ok(just_connected), Some(runtime)) => ProcessTreeConnection::Open {
+                            runtime: runtime.clone(),
+                            just_connected,
+                        },
+                        (Ok(_), None) => ProcessTreeConnection::Failed("process tree disconnected during discovery".to_owned()),
+                        (Err(error), _) => ProcessTreeConnection::Failed(error.message),
+                    };
+                    (root_pid, connection)
+                })
+                .collect::<BTreeMap<_, _>>();
+            process_discovery::populate_process_tree_targets(&mut trees, &connections).await;
+        }
+        Ok(trees)
+    }
+
     async fn get_process_projection(
         &self,
         _ctx: &CallCtx,
@@ -46,9 +101,15 @@ impl ServiceApi for DebuggerService {
             covered_processes.extend(tree.processes.iter().map(|process| process.process_id));
             true
         });
+        let open = self
+            .open_process_tree_runtimes()
+            .await
+            .into_iter()
+            .map(|(root_pid, runtime)| (root_pid, ProcessTreeConnection::Open { runtime, just_connected: false }))
+            .collect::<BTreeMap<_, _>>();
         for tree in &mut trees {
             if expanded.contains(&tree.root_process_id) {
-                crate::connection::discovery::process_discovery::populate_process_tree_targets(std::slice::from_mut(tree))
+                crate::connection::discovery::process_discovery::populate_process_tree_targets(std::slice::from_mut(tree), &open)
                     .await;
             }
         }
@@ -89,5 +150,25 @@ impl ServiceApi for DebuggerService {
             service.shutdown.send_replace(true);
         });
         Ok(true)
+    }
+}
+
+impl DebuggerService {
+    /// Connected process-tree runtimes of all contexts, keyed by root process ID, so discovery can
+    /// list their targets without opening another connection.
+    pub(super) async fn open_process_tree_runtimes(&self) -> BTreeMap<u32, Arc<ConnectionRuntime>> {
+        let state = self.state.lock().await;
+        let mut open = BTreeMap::new();
+        for ((context_id, connection_id), runtime) in &state.runtimes {
+            let Some(connection) = state.contexts.get(context_id).and_then(|context| context.connections.get(connection_id)) else {
+                continue;
+            };
+            if let ConnectionConfiguration::ProcessTree { root_pid } = connection.configuration {
+                if matches!(connection.status, ConnectionStatus::Connected { .. }) {
+                    open.entry(root_pid).or_insert_with(|| runtime.clone());
+                }
+            }
+        }
+        open
     }
 }

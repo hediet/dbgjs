@@ -44,3 +44,41 @@ workspace selection, optional extension suffixes, and multiple daemon
 assignment remain **deferred, not approved implementations**. The earlier
 [design and edge cases](https://github.com/hediet/dbgjs/blob/44cdfc0d59f4112c85c24e8b744f8bec96c69274/docs/todo/context-identity-and-selection.md)
 are historical context, not a second source of truth.
+
+## Idle connection timeout
+
+Contexts default to `inf` (no automatic disconnect). Each connection inherits
+its context's timeout unless it has an explicit override:
+
+```sh
+dbgjs context create :investigation "Investigation" --idle-timeout 2h --set
+dbgjs context configure --idle-timeout 30m
+dbgjs connection add <ws-endpoint> --connection browser --idle-timeout 1h --connect
+dbgjs connection configure --connection browser --idle-timeout inf
+dbgjs connection configure --connection browser --idle-timeout inherit
+```
+
+Durations are positive integers with `ms`, `s`, `m`, `h`, or `d` units.
+Timeout policies are persisted and can change while connected. A policy change
+uses the connection's existing last-use time; reconnecting starts a new clock.
+RPC clients can use `set_context_idle_timeout` and `set_connection_idle_timeout`;
+`null` clears a connection override. Snapshots expose the context default and
+each connection's override and effective timeout.
+
+Activity is tracked independently per connection. Live target commands reset
+only their connection's clock. Context-wide source and breakpoint operations
+keep the connections they address active. Status queries, target/context
+observation subscriptions, incoming CDP events, and offline stored-capture
+analysis do not reset live connection clocks.
+
+In-flight operations, paused targets, coverage/CPU recordings, and open
+relay/Playwright proxy sessions defer automatic disconnect. The idle clock
+restarts when an operation finishes; other blockers are checked once per
+second and restart the clock while present. Timeout checks run once per second,
+so short durations are not precise scheduling deadlines.
+
+Expiry uses the ordinary disconnect behavior for every connection type:
+externally owned applications are detached, and providers launched by dbgjs
+are stopped. The context, connection configuration, breakpoints, and saved
+captures remain. Reconnection is explicit. Cache eviction and automatic
+service-process shutdown are separate future work.

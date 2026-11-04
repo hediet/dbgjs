@@ -75,6 +75,31 @@ async fn resource_session_with_stalled_close(
     (connection, session, browser)
 }
 
+#[tokio::test]
+async fn shared_source_helpers_preserve_runtime_error_variants() {
+    let (connection, session, _browser) = resource_session().await;
+    assert!(matches!(
+        session
+            .load_source_map("https://test/app.js", "hash", "data:application/json", None)
+            .await,
+        Err(CdpRuntimeError::InvalidSourceMapDataUrl(url)) if url == "data:application/json"
+    ));
+    assert!(matches!(
+        session
+            .load_source_map("https://test/app.js", "hash", "data:;base64,!", None)
+            .await,
+        Err(CdpRuntimeError::DecodeSourceMapBase64(_))
+    ));
+    assert!(matches!(
+        session
+            .load_source_map("relative.js", "hash", "app.js.map", None)
+            .await,
+        Err(CdpRuntimeError::InvalidSourceMapUrl { generated_url, source_map_url, .. })
+            if generated_url == "relative.js" && source_map_url == "app.js.map"
+    ));
+    connection.close().await;
+}
+
 async fn next_request(browser: &MemoryTransport<CdpEnvelope>) -> JsonRpcRequest {
     let envelope = tokio::time::timeout(Duration::from_secs(2), browser.recv())
         .await

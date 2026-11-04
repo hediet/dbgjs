@@ -21,6 +21,10 @@ mod relay;
 pub use relay::*;
 mod browser_automation;
 pub use browser_automation::*;
+mod screencast;
+pub use screencast::*;
+mod desktop;
+pub use desktop::*;
 mod coverage;
 pub use coverage::*;
 mod cpu_profiler;
@@ -32,8 +36,16 @@ use linkrpc::prelude::{JsonRpcError, link_rpc_interface};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::service::context_identity::ContextKind;
 use std::collections::BTreeMap;
+
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
+)]
+#[serde(rename_all = "camelCase")]
+pub enum ContextKind {
+    Path,
+    Named,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -72,6 +84,35 @@ pub struct ProcessTreeSnapshot {
     pub targets_observed: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_discovery_error: Option<String>,
+    /// Browser-specific state, observed without opening a debugging connection, so that listing
+    /// never triggers the browser's remote-debugging approval dialog.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser: Option<BrowserRootSnapshot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserRootSnapshot {
+    pub remote_debugging: BrowserRemoteDebugging,
+    /// Titles of the browser's visible top-level windows (Windows only). Each is the title of
+    /// that window's active tab; listing all tabs requires an approved debugging connection.
+    #[serde(default)]
+    pub window_titles: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum BrowserRemoteDebugging {
+    /// The profile has no live remote-debugging endpoint.
+    Off { user_data_dir: String },
+    /// Request-based remote debugging is enabled: each new connection must be approved in the
+    /// browser's native "Allow remote debugging?" dialog.
+    ApprovalRequired { port: u16 },
+    /// A classic remote-debugging port that accepts connections without approval.
+    Open { port: u16 },
+    /// The browser uses a profile that is not on its command line (typically the normal
+    /// profile), so its endpoint cannot be located.
+    Unknown,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -230,6 +271,32 @@ pub struct ContextSnapshot {
     pub breakpoints: Vec<BreakpointSnapshot>,
     #[serde(default)]
     pub source_formatting: SourceFormattingSettings,
+    #[serde(default)]
+    pub idle_timeout: IdleTimeout,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum IdleTimeout {
+    #[default]
+    Infinite,
+    After { milliseconds: u64 },
+}
+
+impl std::fmt::Display for IdleTimeout {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Infinite => formatter.write_str("inf"),
+            Self::After { milliseconds } => {
+                for (unit, divisor) in [("d", 86_400_000), ("h", 3_600_000), ("m", 60_000), ("s", 1_000), ("ms", 1)] {
+                    if milliseconds % divisor == 0 {
+                        return write!(formatter, "{}{unit}", milliseconds / divisor);
+                    }
+                }
+                unreachable!()
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -316,6 +383,10 @@ pub struct ConnectionSnapshot {
     pub generation: u64,
     pub status: ConnectionStatus,
     pub targets: Vec<TargetSnapshot>,
+    #[serde(default)]
+    pub idle_timeout: Option<IdleTimeout>,
+    #[serde(default)]
+    pub effective_idle_timeout: IdleTimeout,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1696,6 +1767,9 @@ pub struct HeapNodeLocationSnapshot {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct HeapNodeSnapshot {
+    /// Captured state only. Live source evidence remains separately labeled in `source`.
+    #[serde(default)]
+    pub description: Option<ValueDescription>,
     pub reference: String,
     pub node_index: u32,
     pub node_type: String,
@@ -1997,6 +2071,27 @@ mod tests {
     }
 
     #[test]
+    fn context_kind_preserves_wire_values_and_schema() {
+        let schema = serde_json::to_value(schemars::schema_for!(super::ContextKind)).unwrap();
+        assert_eq!(schema["title"], "ContextKind");
+        assert_eq!(schema["type"], "string");
+        assert_eq!(schema["enum"], serde_json::json!(["path", "named"]));
+        let validator = jsonschema::validator_for(&schema).unwrap();
+        for (kind, wire) in [
+            (super::ContextKind::Path, serde_json::json!("path")),
+            (super::ContextKind::Named, serde_json::json!("named")),
+        ] {
+            assert_eq!(serde_json::to_value(kind).unwrap(), wire);
+            assert_eq!(
+                serde_json::from_value::<super::ContextKind>(wire.clone()).unwrap(),
+                kind
+            );
+            validator.validate(&wire).unwrap();
+        }
+        assert!(serde_json::from_value::<super::ContextKind>(serde_json::json!("Path")).is_err());
+    }
+
+    #[test]
     fn enum_schemas_preserve_camel_case_wire_fields() {
         fn check<T: schemars::JsonSchema + serde::de::DeserializeOwned + serde::Serialize>(
             examples: &[serde_json::Value],
@@ -2103,6 +2198,8 @@ mod tests {
     #[test]
     fn target_forest_uses_parent_then_opener_and_breaks_cycles() {
         let connection = ConnectionSnapshot {
+            idle_timeout: None,
+            effective_idle_timeout: Default::default(),
             id: "connection".to_owned(),
             configuration: ConnectionConfiguration::DirectCdp {
                 endpoint: "ws://example".to_owned(),
@@ -2168,3 +2265,4 @@ mod tests {
         }
     }
 }
+pub use crate::api::value::{DescribeOptions, ValueDescription, ValueOperation};

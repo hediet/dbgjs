@@ -2,6 +2,13 @@ use super::*;
 
 #[link_rpc_interface(id = "dev.dbgjs.target-debugger")]
 pub trait TargetDebuggerApi {
+    async fn value_operation(
+        target_ref: TargetRef,
+        operation: ValueOperation,
+        options: DescribeOptions,
+        timeout_ms: u64,
+    ) -> Result<ValueDescription, TargetError>;
+
     async fn resolve_target(
         context_id: String,
         selector: String,

@@ -16,6 +16,22 @@ pub fn inspect_live_promise(
     internal_properties: Vec<RuntimeInternalPropertyDescriptor>,
     max_preview_length: u32,
 ) -> PromiseSnapshot {
+    let (state, result) = live_promise_parts(&internal_properties);
+    let settlement = result.map(|value| remote_value_snapshot(value, max_preview_length));
+
+    PromiseSnapshot {
+        reference: Some(object_id),
+        origin: PromiseOrigin::Live,
+        state,
+        settlement,
+        retained: None,
+        classification: PromiseClassification::Indeterminate,
+    }
+}
+
+pub(crate) fn live_promise_parts(
+    internal_properties: &[RuntimeInternalPropertyDescriptor],
+) -> (PromiseState, Option<&RuntimeRemoteObject>) {
     let state_property = internal_properties
         .iter()
         .find(|property| PROMISE_STATE_PROPERTIES.contains(&property.name.as_str()));
@@ -31,18 +47,10 @@ pub fn inspect_live_promise(
         .then(|| {
             result_property
                 .and_then(|property| property.value.as_ref())
-                .map(|value| remote_value_snapshot(value, max_preview_length))
         })
         .flatten();
 
-    PromiseSnapshot {
-        reference: Some(object_id),
-        origin: PromiseOrigin::Live,
-        state,
-        settlement,
-        retained: None,
-        classification: PromiseClassification::Indeterminate,
-    }
+    (state, settlement)
 }
 
 pub fn has_live_promise_evidence(

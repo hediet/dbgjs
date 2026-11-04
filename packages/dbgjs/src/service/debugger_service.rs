@@ -4,15 +4,20 @@ mod cdp_access;
 mod context;
 mod coverage;
 mod cpu_profiler;
+mod desktop;
 mod heap_profiler;
 mod relay;
+mod screencast;
 mod service;
 mod source;
 mod target_debugger;
 mod errors;
+mod idle;
+
+use idle::{ActivityGuard, ConnectionActivity, validate_idle_timeout};
 
 use crate::api::service_api::{
-    BrowserAutomationApi, CaptureApi, CdpAccessApi, ContextApi, CoverageApi, CpuProfilerApi,
+    BrowserAutomationApi, CaptureApi, CdpAccessApi, ContextApi, ContextKind, CoverageApi, CpuProfilerApi,
     HeapProfilerApi, RelayApi, ServiceApi, SourceApi, TargetDebuggerApi,
     CaptureError, CoverageError, CpuProfilerError, HeapProfilerError, TargetError,
 };
@@ -22,7 +27,7 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, OnceLock, Weak};
 use std::time::Duration;
 
 use atomic_write_file::AtomicWriteFile;
@@ -44,7 +49,7 @@ use crate::service::context_engine::{
     reduce_context,
 };
 use crate::service::context_identity::{
-    ContextKind, compare_context_paths, normalize_absolute_path, path_relation,
+    compare_context_paths, normalize_absolute_path, path_relation,
     synthetic_node_target_id,
 };
 use crate::service::context_source_model::{
@@ -65,7 +70,7 @@ use crate::api::service_api::{
     HeapAggregateBy, HeapAggregateSnapshot, HeapCaptureResult, HeapClassSnapshot, HeapDiffSnapshot,
     HeapDominatorSnapshot, HeapEdgePolicy, HeapNodeSelectionSnapshot, HeapNodeSelector,
     HeapPathOptions, HeapPathSnapshot, HeapReferenceDirection, HeapReferencesSnapshot,
-    HeapSnapshotProgress, HeapSnapshotResult, LogpointSpec, MutationOptions, ObservationCursor,
+    HeapSnapshotProgress, HeapSnapshotResult, IdleTimeout, LogpointSpec, MutationOptions, ObservationCursor,
     ObservationResult, PlaywrightProxyEndpoint, ProcessTreeSnapshot, PromiseSelectionSnapshot,
     PromiseState, RelayEndpoint, ResourceCapabilitySnapshot, ResourceFrontierSnapshot,
     ResourceGraphSnapshot, ResourceRelationSnapshot, ResourceSnapshot, ScreenshotSnapshot,
@@ -95,8 +100,8 @@ pub struct DebuggerService {
     state: Arc<Mutex<ServiceState>>,
     // Serializes context intent, target claims, and attachment bootstrap per context.
     breakpoint_intent_locks: Arc<Mutex<BTreeMap<String, std::sync::Weak<Mutex<()>>>>>,
-    attachment_lock: Arc<Mutex<()>>,
-    relay_lifecycle_lock: Arc<Mutex<()>>,
+    attachment_locks: Arc<Mutex<BTreeMap<String, Weak<Mutex<()>>>>>,
+    relay_lifecycle_lock: Arc<tokio::sync::RwLock<()>>,
     relay_attachment_lock: Arc<Mutex<()>>,
     relay_attachments: Arc<Mutex<BTreeMap<(String, String, String, String), RelayDebugAttachment>>>,
     persistence_path: PathBuf,
@@ -208,8 +213,8 @@ impl DebuggerService {
             agent_instance_id: random_instance_id()?,
             state: Arc::new(Mutex::new(state)),
             breakpoint_intent_locks: Arc::new(Mutex::new(BTreeMap::new())),
-            attachment_lock: Arc::new(Mutex::new(())),
-            relay_lifecycle_lock: Arc::new(Mutex::new(())),
+            attachment_locks: Arc::new(Mutex::new(BTreeMap::new())),
+            relay_lifecycle_lock: Arc::new(tokio::sync::RwLock::new(())),
             relay_attachment_lock: Arc::new(Mutex::new(())),
             relay_attachments: Arc::new(Mutex::new(BTreeMap::new())),
             persistence_path,
@@ -258,6 +263,7 @@ impl DebuggerService {
                 .is_some_and(|current| Arc::ptr_eq(current, &runtime));
             if is_current_runtime {
                 state.runtimes.remove(&runtime_key);
+                state.connection_activity.remove(&runtime_key);
                 retract_connection_resource_graph(
                     &mut state,
                     &context_id,
@@ -510,7 +516,7 @@ impl DebuggerService {
                     ContextInput::RuntimeObservation(RuntimeObservation::TargetGraphChanged {
                         connection_id: connection_id.clone(),
                         attempt,
-                        change,
+                        change: change.clone(),
                     }),
                 )
                 .expect("provider target graph observations do not fail");
@@ -565,17 +571,26 @@ impl DebuggerService {
                 }
 
                 if !runtime.is_direct_debugger()
+                    && matches!(change, TargetGraphChange::Created { .. })
                     && let Some(target_id) = target_to_attach
                 {
-                    let _ = service
-                        .attach_target_internal(
-                            &CallCtx::default(),
-                            context_id.clone(),
-                            connection_id.clone(),
-                            target_id,
-                            TargetAttachOptions::default(),
-                        )
-                        .await;
+                    let service = service.clone();
+                    let context_id = context_id.clone();
+                    let connection_id = connection_id.clone();
+                    tokio::spawn(async move {
+                        let _ = service
+                            .attach_target_internal(
+                                &CallCtx::default(),
+                                context_id,
+                                connection_id,
+                                target_id,
+                                TargetAttachOptions {
+                                    expected_connection_generation: Some(generation),
+                                    ..Default::default()
+                                },
+                            )
+                            .await;
+                    });
                 }
             }
         });
@@ -750,6 +765,7 @@ fn context_event_snapshot(event: &crate::service::context_engine::RevisionEvent)
 
 #[derive(Clone, Default)]
 struct ServiceState {
+    connection_activity: BTreeMap<(String, String), Arc<ConnectionActivity>>,
     contexts: BTreeMap<String, Arc<ContextState>>,
     resource_graphs: BTreeMap<String, SharedResourceGraph>,
     process_projections: BTreeMap<String, Vec<ProcessTreeSnapshot>>,
@@ -949,6 +965,75 @@ struct DebugAttachment {
 struct RelayDebugAttachment {
     debugger: TargetDebuggerHandle,
     attachment: DebugAttachment,
+}
+
+struct TargetAttachmentLock {
+    lock: Arc<Mutex<()>>,
+    target_id: String,
+    physical_key: String,
+    attempt: ConnectionAttempt,
+    capability: Option<Arc<dyn DebugCapability>>,
+}
+
+impl TargetAttachmentLock {
+    async fn lock(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.lock.lock().await
+    }
+
+    fn validate(
+        &self,
+        state: &ServiceState,
+        context_id: &str,
+        connection_id: &str,
+    ) -> Result<(), JsonRpcError> {
+        let connection = state
+            .contexts
+            .get(context_id)
+            .ok_or_else(|| not_found("context", context_id))?
+            .connections
+            .get(connection_id)
+            .ok_or_else(|| not_found("connection", connection_id))?;
+        let key = (
+            context_id.into(),
+            connection_id.into(),
+            self.target_id.clone(),
+        );
+        let current_capability = target_debug_capability(state, &key, connection.generation);
+        let same_capability = match (&self.capability, current_capability) {
+            (Some(original), Some(current)) => Arc::ptr_eq(original, &current),
+            (None, None) => true,
+            _ => false,
+        };
+        if self.attempt.configuration_version != connection.configuration_version
+            || self.attempt.generation != connection.generation
+            || self.physical_key != physical_target_key(state, &key)?
+            || !same_capability
+        {
+            return Err(invalid_state(
+                "target changed while waiting for its attachment lock",
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn target_debug_capability(
+    state: &ServiceState,
+    key: &(String, String, String),
+    generation: u64,
+) -> Option<Arc<dyn DebugCapability>> {
+    let target = context_connection_target(state, &key.0, &key.1, generation, &key.2)?;
+    state
+        .resource_graphs
+        .get(&key.0)?
+        .read(|graph| {
+            graph.capability_from_source(
+                &target.resource_id,
+                &connection_source_id(&key.1, generation),
+                &CapabilityKind::Debug,
+            )
+        })?
+        .as_debug()
 }
 
 fn physical_target_key(
@@ -1902,11 +1987,14 @@ impl DebuggerService {
         target_id: String,
         options: TargetAttachOptions,
     ) -> Result<TargetAttachmentResult, JsonRpcError> {
-        let _attachment_guard = self.attachment_lock.lock().await;
+        let attachment_lock = self
+            .target_attachment_lock(&context_id, &connection_id, &target_id)
+            .await?;
+        let _attachment_guard = attachment_lock.lock().await;
         let (mut target_id, mut debugger_key, prior_owner, mut resolved_generation) = {
             let mut state = self.state.lock().await;
-            let target_id =
-                Self::resolve_target_id_in_state(&state, &context_id, &connection_id, &target_id)?;
+            attachment_lock.validate(&state, &context_id, &connection_id)?;
+            let target_id = attachment_lock.target_id.clone();
             let debugger_key = (context_id.clone(), connection_id.clone(), target_id.clone());
             let context = state
                 .contexts
@@ -1981,6 +2069,8 @@ impl DebuggerService {
         };
 
         let mut outcome = TargetAttachmentOutcome::Created;
+        let mut reconnected_attachment_lock = None;
+        let mut _reconnected_attachment_guard = None;
         if let Some(owner) = &prior_owner {
             self.publish_target_attachment_change(&owner.key, owner.attempt)
                 .await;
@@ -2019,6 +2109,14 @@ impl DebuggerService {
                         .resolve_target_id(&context_id, &connection_id, &target_id)
                         .await?;
                     debugger_key = (context_id.clone(), connection_id.clone(), target_id.clone());
+                    let reconnected = self
+                        .target_attachment_lock(&context_id, &connection_id, &target_id)
+                        .await?;
+                    if !Arc::ptr_eq(&attachment_lock.lock, &reconnected.lock) {
+                        _reconnected_attachment_guard =
+                            Some(reconnected.lock.clone().lock_owned().await);
+                    }
+                    reconnected_attachment_lock = Some(reconnected);
                 }
             } else if let Some(attachment) = owner.attachment {
                 attachment
@@ -2035,6 +2133,13 @@ impl DebuggerService {
 
         let (runtime, attempt, debug_capability, waiting_for_debugger, source_model) = {
             let mut state = self.state.lock().await;
+            reconnected_attachment_lock
+                .as_ref()
+                .unwrap_or(&attachment_lock)
+                .validate(&state, &context_id, &connection_id)?;
+            if state.target_debuggers.contains_key(&debugger_key) {
+                return Err(ownership_conflict(&debugger_key));
+            }
             let context = state
                 .contexts
                 .get(&context_id)
@@ -2152,7 +2257,9 @@ impl DebuggerService {
             .get(&context_id)
             .and_then(|context| context.connections.get(&connection_id))
             .is_some_and(|connection| connection.generation == generation);
-        if !runtime_is_current || !generation_is_current {
+        let capability_is_current = target_debug_capability(&state, &debugger_key, generation)
+            .is_some_and(|current| Arc::ptr_eq(&current, &debug_capability));
+        if !runtime_is_current || !generation_is_current || !capability_is_current {
             drop(state);
             let _ = debug_capability.close(&opened).await;
             return Err(invalid_state(
@@ -2262,6 +2369,47 @@ impl DebuggerService {
             debugger.set_breakpoint(context_revision, breakpoint).await?;
         }
         Ok(())
+    }
+
+    async fn target_attachment_lock(
+        &self,
+        context_id: &str,
+        connection_id: &str,
+        target_id: &str,
+    ) -> Result<TargetAttachmentLock, JsonRpcError> {
+        let (target_id, physical_key, attempt, capability) = {
+            let state = self.state.lock().await;
+            let target_id =
+                Self::resolve_target_id_in_state(&state, context_id, connection_id, target_id)?;
+            let key = (context_id.into(), connection_id.into(), target_id.clone());
+            let connection = &state.contexts[context_id].connections[connection_id];
+            (
+                target_id,
+                physical_target_key(&state, &key)?,
+                ConnectionAttempt {
+                    configuration_version: connection.configuration_version,
+                    generation: connection.generation,
+                },
+                target_debug_capability(&state, &key, connection.generation),
+            )
+        };
+        let mut locks = self.attachment_locks.lock().await;
+        locks.retain(|_, lock| lock.strong_count() != 0);
+        let lock = locks
+            .get(&physical_key)
+            .and_then(Weak::upgrade)
+            .unwrap_or_else(|| {
+                let lock = Arc::new(Mutex::new(()));
+                locks.insert(physical_key.clone(), Arc::downgrade(&lock));
+                lock
+            });
+        Ok(TargetAttachmentLock {
+            lock,
+            target_id,
+            physical_key,
+            attempt,
+            capability,
+        })
     }
 
     /// Looks up an already-attached target's debugger handle, rejecting the call while its
@@ -2771,7 +2919,7 @@ impl DebuggerService {
     /// be removed once the relay's dispatch task completes, however it ends.
     async fn register_relay(
         &self,
-        _relay_lifecycle_guard: &tokio::sync::MutexGuard<'_, ()>,
+        _relay_lifecycle_guard: &tokio::sync::RwLockWriteGuard<'_, ()>,
         id: String,
         context_id: String,
         relay: crate::connection::relay::context_relay::RelaySession,
@@ -3172,7 +3320,6 @@ fn sync_connection_resource_graph(
     runtime: &Arc<ConnectionRuntime>,
 ) -> Result<(), String> {
     let source = connection_source_id(connection_id, connection.generation);
-    graph.retract_source(&source);
 
     let root_id = connection_root_resource_id(connection_id, connection.generation);
     let root_kind = match connection.configuration {
@@ -3198,6 +3345,16 @@ fn sync_connection_resource_graph(
             )
         })
         .collect::<BTreeMap<_, _>>();
+    // Keep capability identity across metadata updates, but not across removal/recreation.
+    // Pending attachments use it to reject completion for an obsolete target incarnation.
+    let capabilities = resources
+        .values()
+        .filter_map(|resource| {
+            graph.capability_from_source(resource, &source, &CapabilityKind::Debug)
+                .map(|capability| (resource.clone(), capability))
+        })
+        .collect::<BTreeMap<_, _>>();
+    graph.retract_source(&source);
     let mut root_upsert = ResourceUpsert::new(
         root_id.clone(),
         ResourceFacts::of_kind(ResourceKind::new(root_kind))
@@ -3282,9 +3439,9 @@ fn sync_connection_resource_graph(
         }
         delta = delta.upsert(
             ResourceUpsert::new(resource.clone(), facts)
-                .with_capability(CapabilityObject::Debug(
-                    runtime.debug_capability(resource.clone(), runtime_id),
-                ))
+                .with_capability(capabilities.get(&resource).cloned().unwrap_or_else(|| {
+                    CapabilityObject::Debug(runtime.debug_capability(resource.clone(), runtime_id))
+                }))
                 .with_frontier(RelationKind::Contains, DiscoveryState::Unobserved),
         );
 
@@ -4202,6 +4359,8 @@ fn snapshot(
                 generation: connection.generation,
                 status: connection.status.clone(),
                 targets: targets.into_values().map(|target| target.target).collect(),
+                idle_timeout: connection.idle_timeout,
+                effective_idle_timeout: connection.idle_timeout.unwrap_or(context.idle_timeout),
             }
         })
         .collect::<Vec<_>>();
@@ -4224,6 +4383,7 @@ fn snapshot(
         agent_instance_id: agent_instance_id.to_owned(),
         id: id.to_owned(),
         display_name: context.display_name.clone(),
+        idle_timeout: context.idle_timeout,
         revision: context.revision,
         resource_revision: graph.map_or(0, |graph| graph.revision.0),
         connections,
@@ -4482,6 +4642,8 @@ struct StoredContextState {
     breakpoints: BTreeMap<String, StoredBreakpointState>,
     #[serde(default)]
     source_formatting: SourceFormattingSettings,
+    #[serde(default)]
+    idle_timeout: IdleTimeout,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -4489,6 +4651,8 @@ struct StoredContextState {
 struct StoredConnectionState {
     configuration: ConnectionConfiguration,
     configuration_version: u64,
+    #[serde(default)]
+    idle_timeout: Option<IdleTimeout>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -4546,6 +4710,7 @@ impl From<&ServiceState> for StoredServiceState {
                                 .copied()
                                 .unwrap_or(ContextKind::Named),
                             display_name: context.display_name.clone(),
+                            idle_timeout: context.idle_timeout,
                             revision: context.revision,
                             connections: context
                                 .connections
@@ -4556,6 +4721,7 @@ impl From<&ServiceState> for StoredServiceState {
                                         StoredConnectionState {
                                             configuration: connection.configuration.clone(),
                                             configuration_version: connection.configuration_version,
+                                            idle_timeout: connection.idle_timeout,
                                         },
                                     )
                                 })
@@ -4658,6 +4824,7 @@ fn load_state(path: &Path) -> Result<ServiceState, ServicePersistenceError> {
                     id,
                     Arc::new(ContextState {
                         display_name: context.display_name,
+                        idle_timeout: context.idle_timeout,
                         revision: context.revision,
                         connections: Arc::new(
                             context
@@ -4671,6 +4838,7 @@ fn load_state(path: &Path) -> Result<ServiceState, ServicePersistenceError> {
                                             configuration_version: connection.configuration_version,
                                             generation: 0,
                                             status: ConnectionStatus::Disconnected,
+                                            idle_timeout: connection.idle_timeout,
                                         }),
                                     )
                                 })
@@ -4701,6 +4869,7 @@ fn load_state(path: &Path) -> Result<ServiceState, ServicePersistenceError> {
             })
             .collect(),
         source_models: BTreeMap::new(),
+        connection_activity: BTreeMap::new(),
         resource_graphs: BTreeMap::new(),
         process_projections: BTreeMap::new(),
         context_kinds,
@@ -4773,6 +4942,7 @@ fn migrate_v1(stored: StoredServiceStateV1) -> LegacyStoredServiceState {
                     id,
                     StoredContextState {
                         kind: ContextKind::Named,
+                        idle_timeout: IdleTimeout::Infinite,
                         display_name: context.display_name,
                         revision: context.revision,
                         connections: context
@@ -4783,6 +4953,7 @@ fn migrate_v1(stored: StoredServiceStateV1) -> LegacyStoredServiceState {
                                     id,
                                     StoredConnectionState {
                                         configuration: connection.endpoint.into(),
+                                        idle_timeout: None,
                                         configuration_version: connection.configuration_version,
                                     },
                                 )
@@ -5494,8 +5665,14 @@ fn transition_rpc_error(error: ContextTransitionError) -> JsonRpcError {
 }
 
 #[cfg(test)]
+#[path = "debugger_service/attachment_lifecycle_tests.rs"]
+mod attachment_lifecycle_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    mod capture_measurement;
 
     #[tokio::test]
     async fn source_endpoints_preserve_validation_and_missing_context_errors() {
@@ -5786,6 +5963,7 @@ mod tests {
             }],
             targets_observed: true,
             target_discovery_error: None,
+            browser: None,
         };
         let overlapping_tree = ProcessTreeSnapshot {
             root_process_id: 200,
@@ -5801,6 +5979,7 @@ mod tests {
             targets: Vec::new(),
             targets_observed: false,
             target_discovery_error: None,
+            browser: None,
         };
         let mut state = ServiceState::default();
 
@@ -5886,6 +6065,7 @@ mod tests {
     ) -> Arc<ContextState> {
         Arc::new(ContextState {
             display_name: "test".into(),
+            idle_timeout: IdleTimeout::Infinite,
             revision: 1,
             connections: Arc::new(
                 connections
@@ -5894,6 +6074,7 @@ mod tests {
                         (
                             connection_id.into(),
                             Arc::new(crate::service::context_engine::ConnectionState {
+                                idle_timeout: None,
                                 configuration: ConnectionConfiguration::DirectCdp {
                                     endpoint: format!("ws://{connection_id}"),
                                 },
@@ -5913,7 +6094,7 @@ mod tests {
         })
     }
 
-    fn insert_context_with_targets(
+    pub(super) fn insert_context_with_targets(
         state: &mut ServiceState,
         context_id: &str,
         connections: impl IntoIterator<Item = (&'static str, u64, Vec<TargetSnapshot>)>,
@@ -6004,15 +6185,15 @@ mod tests {
         state.resource_graphs.insert(context_id.to_owned(), graph);
     }
 
-    fn service_with_state(path: PathBuf, state: ServiceState) -> DebuggerService {
+    pub(super) fn service_with_state(path: PathBuf, state: ServiceState) -> DebuggerService {
         let (shutdown, _) = watch::channel(false);
         let (revision_signal, _) = watch::channel(0);
         DebuggerService {
             agent_instance_id: "test-agent".into(),
             state: Arc::new(Mutex::new(state)),
             breakpoint_intent_locks: Arc::new(Mutex::new(BTreeMap::new())),
-            attachment_lock: Arc::new(Mutex::new(())),
-            relay_lifecycle_lock: Arc::new(Mutex::new(())),
+            attachment_locks: Arc::new(Mutex::new(BTreeMap::new())),
+            relay_lifecycle_lock: Arc::new(tokio::sync::RwLock::new(())),
             relay_attachment_lock: Arc::new(Mutex::new(())),
             relay_attachments: Arc::new(Mutex::new(BTreeMap::new())),
             persistence_path: path,
@@ -8089,6 +8270,203 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn context_observation_preserves_snapshot_history_handoff() {
+        let root = std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join(format!(
+                "context-observation-handoff-{}",
+                random_instance_id().unwrap()
+            ));
+        fs::create_dir_all(&root).unwrap();
+        let service = service_with_state(root.join("service.json"), ServiceState::default());
+        let call = CallCtx::default();
+        let initial = service
+            .put_context(&call, "test".into(), ContextKind::Named, None)
+            .await
+            .unwrap();
+        let ObservationResult::Items { items } = service
+            .observe_context(&call, "test".into(), ObservationCursor::Current, 0)
+            .await
+            .unwrap()
+        else {
+            panic!("expected current snapshot")
+        };
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].snapshot, initial);
+        assert!(items[0].events.is_empty());
+
+        let updated = service
+            .put_context(
+                &call,
+                "test".into(),
+                ContextKind::Named,
+                Some("updated".into()),
+            )
+            .await
+            .unwrap();
+        let ObservationResult::Items { items } = service
+            .observe_context(
+                &call,
+                "test".into(),
+                ObservationCursor::After {
+                    revision: initial.revision,
+                },
+                0,
+            )
+            .await
+            .unwrap()
+        else {
+            panic!("expected history after snapshot")
+        };
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].snapshot, updated);
+        assert!(!items[0].events.is_empty());
+
+        let observation = service.observe_context(
+            &call,
+            "test".into(),
+            ObservationCursor::After {
+                revision: updated.revision,
+            },
+            60_000,
+        );
+        tokio::pin!(observation);
+        assert!(futures_util::poll!(&mut observation).is_pending());
+        let latest = service
+            .put_context(
+                &call,
+                "test".into(),
+                ContextKind::Named,
+                Some("latest".into()),
+            )
+            .await
+            .unwrap();
+        let ObservationResult::Items { items } =
+            tokio::time::timeout(Duration::from_secs(1), &mut observation)
+                .await
+                .unwrap()
+                .unwrap()
+        else {
+            panic!("expected waiting update")
+        };
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].snapshot, latest);
+        for timeout_ms in [0, 1] {
+            assert_eq!(
+                service
+                    .observe_context(
+                        &call,
+                        "test".into(),
+                        ObservationCursor::After {
+                            revision: latest.revision,
+                        },
+                        timeout_ms,
+                    )
+                    .await
+                    .unwrap(),
+                ObservationResult::Items { items: Vec::new() }
+            );
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn context_observation_preserves_bounded_history_and_gap_snapshots() {
+        let service = service_with_state(PathBuf::from("unused"), ServiceState::default());
+        let call = CallCtx::default();
+        let mut state = service.state.lock().await;
+        let mut context = ContextState::new("test".into());
+        for revision in 1..=257 {
+            let transition = reduce_context(
+                &context,
+                ContextInput::UserCommand(UserCommand::PutContext {
+                    display_name: Some(revision.to_string()),
+                }),
+            )
+            .unwrap();
+            service.commit_context(&mut state, "test", transition);
+            context = state.contexts["test"].clone();
+        }
+        assert_eq!(state.history["test"].len(), 256);
+        drop(state);
+        let current = service.get_context(&call, "test".into()).await.unwrap();
+        assert_eq!(current.revision, 257);
+        for (revision, oldest_available_revision) in [(0, 2), (256, 257)] {
+            assert_eq!(
+                service
+                    .observe_context(
+                        &call,
+                        "test".into(),
+                        ObservationCursor::After { revision },
+                        0,
+                    )
+                    .await
+                    .unwrap(),
+                ObservationResult::HistoryGap {
+                    requested_revision: revision,
+                    oldest_available_revision,
+                    current: current.clone(),
+                }
+            );
+            service.state.lock().await.history.clear();
+        }
+        assert_eq!(
+            service
+                .observe_context(
+                    &call,
+                    "test".into(),
+                    ObservationCursor::After { revision: u64::MAX },
+                    0,
+                )
+                .await
+                .unwrap(),
+            ObservationResult::Items { items: Vec::new() }
+        );
+    }
+
+    #[tokio::test]
+    async fn context_observation_waiter_wakes_when_context_is_deleted() {
+        let root = std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join(format!(
+                "context-observation-delete-{}",
+                random_instance_id().unwrap()
+            ));
+        fs::create_dir_all(&root).unwrap();
+        let service = service_with_state(root.join("service.json"), ServiceState::default());
+        let call = CallCtx::default();
+        let snapshot = service
+            .put_context(&call, "test".into(), ContextKind::Named, None)
+            .await
+            .unwrap();
+        let observation = service.observe_context(
+            &call,
+            "test".into(),
+            ObservationCursor::After {
+                revision: snapshot.revision,
+            },
+            60_000,
+        );
+        tokio::pin!(observation);
+        assert!(futures_util::poll!(&mut observation).is_pending());
+
+        service
+            .delete_context(&call, "test".into(), MutationOptions::default())
+            .await
+            .unwrap();
+        let result = tokio::time::timeout(Duration::from_secs(1), &mut observation).await;
+        fs::remove_dir_all(root).unwrap();
+        assert_eq!(
+            result
+                .expect("deletion must wake the waiting observer")
+                .unwrap_err(),
+            not_found("context", "test")
+        );
+    }
+
+    #[tokio::test]
     async fn failed_context_persistence_does_not_cancel_playwright_proxies() {
         let root = std::env::current_dir()
             .unwrap()
@@ -8133,6 +8511,21 @@ mod tests {
             },
         );
         let service = service_with_state(blocker.join("service.json"), state);
+        let call = CallCtx::default();
+        let snapshot = service.get_context(&call, "test".into()).await.unwrap();
+        let retained = ContextObservation {
+            snapshot: snapshot.clone(),
+            events: Vec::new(),
+        };
+        service
+            .state
+            .lock()
+            .await
+            .history
+            .entry("test".into())
+            .or_default()
+            .push_back(retained.clone());
+        let signal = service.revision_signal.subscribe();
 
         assert!(
             service
@@ -8143,6 +8536,27 @@ mod tests {
                 )
                 .await
                 .is_err()
+        );
+        assert!(!signal.has_changed().unwrap());
+        assert_eq!(
+            service.get_context(&call, "test".into()).await.unwrap(),
+            snapshot
+        );
+        assert_eq!(
+            service
+                .observe_context(
+                    &call,
+                    "test".into(),
+                    ObservationCursor::After {
+                        revision: snapshot.revision.saturating_sub(1),
+                    },
+                    0,
+                )
+                .await
+                .unwrap(),
+            ObservationResult::Items {
+                items: vec![retained]
+            }
         );
         assert!(!*cancelled.borrow());
         assert!(capture_path.exists());

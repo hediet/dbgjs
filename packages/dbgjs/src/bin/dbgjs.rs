@@ -10,22 +10,24 @@ use std::time::Duration;
 
 use atomic_write_file::AtomicWriteFile;
 use base64::Engine;
+use dbgjs::api::service_api::ContextKind;
+use dbgjs::api::value::{DescribeOptions, ValueDescription, ValueOperation};
 use dbgjs::service::context_identity::{
-    ContextIdentity, ContextKind, normalize_absolute_path, path_and_parents,
+    ContextIdentity, normalize_absolute_path, path_and_parents,
     resolve_context_expression, synthetic_node_target_id,
 };
 use dbgjs::capture::coverage::coverage_filter::CoveragePathFilter;
-use dbgjs::connection::transport::local_rpc::{connect_existing, default_state_file, ensure_service, selection_state_file};
+use dbgjs::connection::transport::local_rpc::{default_state_file, selection_state_file, LocalRpcError, RemoteServiceEndpoint, ServiceTarget};
 use dbgjs::connection::transport::service_discovery::list_available_services;
-use dbgjs::connection::providers::playwright_proxy::{CLEANUP_RESERVE, OPERATION_TIMEOUT as PLAYWRIGHT_EXECUTION_TIMEOUT};
+use dbgjs::connection::providers::playwright_proxy::{CLEANUP_RESERVE, SETUP_TIMEOUT as PLAYWRIGHT_SETUP_TIMEOUT};
 use dbgjs::debugger::promise_debugging::{
-    DEFAULT_PROMISE_LIMIT, DEFAULT_PROMISE_PREVIEW_LENGTH, DEFAULT_VALUE_PREVIEW_LENGTH,
+    DEFAULT_PROMISE_LIMIT, DEFAULT_PROMISE_PREVIEW_LENGTH,
 };
 use dbgjs::api::service_api::{
     BreakpointSpec, CaptureKind, CdpStdioTopology, ConnectionConfiguration, ConnectionStatus,
     ContextSnapshot, ContextSummary, CpuProfileSnapshot, DbgServiceClient, EvaluationSnapshot,
     HeapAggregateBy, HeapEdgePolicy, HeapNodeSelector, HeapPathCost, HeapPathDirection,
-    HeapPathOptions, HeapReferenceDirection, HeapSnapshotProgress, LogpointSpec, MutationOptions,
+    HeapPathOptions, HeapReferenceDirection, HeapSnapshotProgress, IdleTimeout, LogpointSpec, MutationOptions,
     ObservationCursor, ObservationResult, PlaywrightChannel, ProcessRole, ProcessRootKind,
     ProcessTreeSnapshot, PromiseState, ResourceGraphSnapshot, SourceDisplayOptions,
     SourceFormattingMode, SourceSearchOptions, SourceTreeKind, SourceViewPreference, StepKind,
@@ -43,6 +45,12 @@ mod bounded_tree;
 mod daemon_view;
 #[path = "dbgjs/output.rs"]
 mod output;
+#[path = "dbgjs/idle_timeout.rs"]
+mod idle_timeout;
+#[path = "dbgjs/record.rs"]
+mod record;
+
+use idle_timeout::extract_idle_timeout_option;
 
 use output::{
     ConnectionListEntry, ConnectionListOutput, CoverageOutputOptions, CpuProfileOutputOptions,
@@ -154,6 +162,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         println!("{}", usage());
         return Ok(());
     }
+    let service_options = extract_service_options(&mut arguments)?;
     let mut scope_options = extract_scope_options(&mut arguments)?;
     if matches!(arguments.as_slice(), [service, list] if service == "service" && list == "list") {
         let services = list_available_services().await?;
@@ -176,20 +185,40 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         return Ok(());
     }
-    let state_file = default_state_file();
-    let selection_file = selection_state_file(&state_file);
+    let idle_timeout = extract_idle_timeout_option(&mut arguments)?;
+    let local_state_file = default_state_file();
+    let selection_file = selection_state_file(&local_state_file);
     let cwd = env::current_dir()?;
     let normalized_cwd = normalize_absolute_path(&cwd)?;
-    if !is_context_create(&arguments)
+    let creating_context = is_context_create(&arguments);
+    if !creating_context
         && let Some(expression) = scope_options.context.take()
     {
         scope_options.context = Some(resolve_context_expression(&expression, &cwd)?.id);
-    } else if command_requires_context(&arguments) {
-        let client = ensure_service(&state_file).await?;
+    }
+    // A context being created lives where the options say; any other context determines its service.
+    let service_target = {
+        let store = load_selection_store(&selection_file, &normalized_cwd)?;
+        let context = (!creating_context)
+            .then(|| cli_side_context(&store, &normalized_cwd, scope_options.context.as_deref()))
+            .flatten();
+        resolve_service_target(
+            &service_options,
+            &service_options_from_env(),
+            local_state_file,
+            &store,
+            context.as_deref(),
+        )?
+    };
+    if !creating_context
+        && scope_options.context.is_none()
+        && command_requires_context(&arguments)
+    {
+        let client = ensure_service(&service_target).await?;
         scope_options.context =
             Some(resolve_implicit_context(&client, &selection_file, &normalized_cwd).await?);
     }
-    if !is_context_create(&arguments)
+    if !creating_context
         && let Some(context) = scope_options.context.as_deref()
     {
         activate_selection_scope(&selection_file, &normalized_cwd, context)?;
@@ -211,7 +240,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 )
                 .into());
             }
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             daemon_view::run(
                 &client,
                 scope_options.context.as_deref(),
@@ -222,14 +251,15 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         [set, context] if set == "set" && matches!(context.as_str(), "context" | "workspace") => {
             let context_id = required_option("--context", scope_options.context.as_ref())?;
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             rpc(client.contexts.get_context(context_id.clone()).await)?;
+            record_context_service(&selection_file, &normalized_cwd, &context_id, Some(&service_target))?;
             select_context(&selection_file, &context_id)?;
             println!("Context: {context_id}");
         }
         [set, target] if set == "set" && target == "target" => {
             let selector = required_option("--target", scope_options.target.as_ref())?;
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             let selection = load_selection(&selection_file)?;
             let scope = resolve_scope(&client, &selection, &scope_options).await?;
             let snapshot = rpc(client.targets.get_target(scope.target_ref()).await)?;
@@ -237,7 +267,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             println!("Target: {selector}");
         }
         [target, show] if target == "target" && show == "show" => {
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             let selection = load_selection(&selection_file)?;
             let scope = resolve_scope(&client, &selection, &scope_options).await?;
             let snapshot = rpc(client.targets.get_target(scope.target_ref()).await)?;
@@ -246,11 +276,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         [target, graph] if target == "target" && graph == "graph" => {
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             output.print(&rpc(client.contexts.get_resource_graph(context_id).await)?)?;
         }
         [log, options @ ..] if log == "log" => {
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             let mut selection = load_selection(&selection_file)?;
             let scope = resolve_scope(&client, &selection, &scope_options).await?;
             let snapshot = rpc(client.targets.get_logs(scope.target_ref()).await)?;
@@ -279,7 +309,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 && step == "step"
                 && matches!(kind.as_str(), "into" | "over" | "out") =>
         {
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             let selection = load_selection(&selection_file)?;
             let scope = resolve_scope(&client, &selection, &scope_options).await?;
             let pause_epoch = resolve_pause_epoch(
@@ -297,7 +327,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             print_target_with_watches(&output, &client, &selection, &scope, &snapshot).await?;
         }
         [target, release] if target == "target" && release == "release" => {
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             let selection = load_selection(&selection_file)?;
             let scope = resolve_scope(&client, &selection, &scope_options).await?;
             let snapshot = rpc(client.targets.release_target(scope.target_ref()).await)?;
@@ -310,7 +340,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     .first()
                     .is_none_or(|argument| argument.starts_with("--")) =>
         {
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             let selection = load_selection(&selection_file)?;
             let scope = resolve_scope(&client, &selection, &scope_options).await?;
             let pause_epoch = resolve_pause_epoch(
@@ -329,33 +359,29 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         [target, eval, arguments @ ..] if target == "target" && eval == "eval" => {
             let options = parse_eval_options(arguments, io::stdin())?;
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             let selection = load_selection(&selection_file)?;
             let scope = resolve_scope(&client, &selection, &scope_options).await?;
-            let snapshot = rpc(client.targets.get_target(scope.target_ref()).await)?;
             let value = rpc(client
                 .targets
-                .inspect_value(
+                .value_operation(
                     scope.target_ref(),
-                    pause_epoch(&snapshot),
-                    ValueSelector::Expression {
+                    ValueOperation::Evaluate {
                         expression: options.expression,
-                        allow_side_effects: true,
+                        retain: options.retain,
+                        await_result: options.await_result,
                     },
-                    ValueInspectionOptions {
-                        max_preview_length: options.max_preview_length,
-                        max_properties: DEFAULT_VALUE_PROPERTY_LIMIT,
-                        retain_references: false,
-                    },
+                    options.describe_options,
+                    options.timeout_ms,
                 )
                 .await)?;
-            output.print_eval(&value, options.full)?;
+            print_owned_value(output, &value, options.json, options.json_expect, options.describe, options.max_output_bytes)?;
         }
         [playwright, arguments @ ..] if playwright == "playwright" => {
             let program = read_playwright_program(arguments, io::stdin())?;
-            let deadline = tokio::time::Instant::now() + PLAYWRIGHT_EXECUTION_TIMEOUT;
+            let setup_deadline = tokio::time::Instant::now() + PLAYWRIGHT_SETUP_TIMEOUT;
             let client =
-                tokio::time::timeout_at(deadline - CLEANUP_RESERVE, ensure_service(&state_file))
+                tokio::time::timeout_at(setup_deadline - CLEANUP_RESERVE, ensure_service(&service_target))
                     .await
                     .map_err(|_| {
                         io::Error::new(
@@ -364,7 +390,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                         )
                     })??;
             let scope = tokio::time::timeout_at(
-                deadline - CLEANUP_RESERVE,
+                setup_deadline - CLEANUP_RESERVE,
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options),
             )
             .await
@@ -375,7 +401,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 )
             })??;
             let context = rpc(tokio::time::timeout_at(
-                deadline - CLEANUP_RESERVE,
+                setup_deadline - CLEANUP_RESERVE,
                 client.contexts.get_context(scope.context.clone()),
             )
             .await
@@ -397,7 +423,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 })?
                 .generation;
             let proxy = tokio::time::timeout_at(
-                deadline - CLEANUP_RESERVE,
+                setup_deadline - CLEANUP_RESERVE,
                 client
                     .relay
                     .open_playwright_proxy(scope.target_ref(), generation),
@@ -410,15 +436,15 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 )
             })?;
             let proxy = rpc(proxy)?;
-            let result =
-                run_playwright_program(&proxy.websocket_url, &program, &scope.target, deadline)
-                    .await;
-            let cleanup_deadline = std::cmp::min(
-                deadline,
-                tokio::time::Instant::now() + Duration::from_secs(2),
-            );
-            let cleanup = tokio::time::timeout_at(
-                cleanup_deadline,
+            let result = run_playwright_program(
+                &proxy.websocket_url,
+                &program,
+                &scope.target,
+                setup_deadline,
+            )
+            .await;
+            let cleanup = tokio::time::timeout(
+                CLEANUP_RESERVE,
                 client.relay.close_playwright_proxy(proxy.id),
             )
             .await;
@@ -433,7 +459,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         [target, cdp, method, options @ ..] if target == "target" && cdp == "cdp" => {
             let options = parse_raw_cdp_options(options)?;
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             let scope =
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
             let result = if let Some(session_id) = options.session_id {
@@ -460,9 +486,26 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             };
             println!("{}", serde_json::to_string_pretty(&result)?);
         }
+        [target, operation, options @ ..] if target == "target" && operation == "record" => {
+            let options = record::Options::parse(options)?;
+            let client = ensure_service(&service_target).await?;
+            let scope =
+                resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
+            let relay = rpc(client.relay.open_target_relay(scope.target_ref()).await)?;
+            let result = record::run(&relay.websocket_url, options).await;
+            let cleanup = tokio::time::timeout(
+                Duration::from_secs(5), client.relay.close_relay(relay.id),
+            ).await;
+            let cleanup_error = match cleanup {
+                Ok(Ok(_)) => None,
+                Ok(Err(error)) => Some(format!("recording relay cleanup failed: {error}")),
+                Err(_) => Some("recording relay cleanup exceeded 5 seconds".into()),
+            };
+            playwright_result_with_cleanup(result, cleanup_error)?;
+        }
         [target, relay, options @ ..] if target == "target" && relay == "relay" => {
             parse_relay_options(options)?;
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             let scope =
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
             let relay = rpc(client.relay.open_target_relay(scope.target_ref()).await)?;
@@ -470,9 +513,27 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let _ = client.relay.close_relay(relay.id).await;
             result?;
         }
+        [value, operation, reference, arguments @ ..]
+            if value == "value" && matches!(operation.as_str(), "show" | "children" | "await" | "release") =>
+        {
+            let mut arguments = arguments.to_vec();
+            arguments.push("null".into());
+            let options = parse_eval_options(&arguments, io::empty())?;
+            let operation = match operation.as_str() {
+                "show" => ValueOperation::Show { reference: reference.clone() },
+                "children" => ValueOperation::Children { reference: reference.clone() },
+                "await" => ValueOperation::Await { reference: reference.clone() },
+                _ => ValueOperation::Release { reference: reference.clone() },
+            };
+            let client = ensure_service(&service_target).await?;
+            let scope = resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
+            let value = rpc(client.targets.value_operation(scope.target_ref(), operation,
+                options.describe_options, options.timeout_ms).await)?;
+            print_owned_value(output, &value, options.json, options.json_expect, options.describe, options.max_output_bytes)?;
+        }
         [value, arguments @ ..] if value == "value" => {
             let options = parse_value_options(arguments)?;
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             let scope =
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
             let snapshot = rpc(client.targets.get_target(scope.target_ref()).await)?;
@@ -494,7 +555,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         [target, logpoint, delete, id]
             if target == "target" && logpoint == "logpoint" && delete == "delete" =>
         {
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             let scope =
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
             let result = rpc(client
@@ -507,7 +568,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             if target == "target" && logpoint == "logpoint" =>
         {
             let install = parse_logpoint_install_options(options)?;
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             let scope =
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
             let mut snapshot = rpc(client
@@ -537,7 +598,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 .iter()
                 .map(|logpoint| format!("log:{}", logpoint.id))
                 .collect::<Vec<_>>();
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             let scope =
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
             let mut snapshot = rpc(client
@@ -552,7 +613,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             output.print_target_with_breakpoint_sources(&snapshot, &scope.target, &ids)?;
         }
         [target, click, selector] if target == "target" && click == "click" => {
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             let selection = load_selection(&selection_file)?;
             let scope = resolve_scope(&client, &selection, &scope_options).await?;
             rpc(client
@@ -562,7 +623,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             println!("Clicked {selector}");
         }
         [target, type_text, text] if target == "target" && type_text == "type" => {
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             let scope =
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
             rpc(client
@@ -575,7 +636,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             if screenshot == "screenshot" && capture == "capture" =>
         {
             let options = parse_screenshot_capture_options(options)?;
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             let scope =
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
             let snapshot = rpc(client.browser.capture_screenshot(scope.target_ref()).await)?;
@@ -599,7 +660,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             )?;
         }
         [coverage, start] if coverage == "coverage" && start == "start" => {
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             let scope =
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
             rpc(client.coverage.start_coverage(scope.target_ref()).await)?;
@@ -610,7 +671,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         {
             let options = parse_coverage_capture_options(options)?;
             warn_deprecated_coverage_path(options.deprecated_path);
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             let scope =
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
             let snapshot = rpc(client
@@ -640,7 +701,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         [coverage, stop, options @ ..] if coverage == "coverage" && stop == "stop" => {
             let options = parse_coverage_stop_options(options)?;
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             let scope =
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
             let snapshot = rpc(client
@@ -658,14 +719,14 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         [coverage, show, options @ ..] if coverage == "coverage" && show == "show" => {
             let options = parse_coverage_show_options(options)?;
             warn_deprecated_coverage_path(options.deprecated_path);
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             let context =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
             show_stored_coverage(&client, &output, context, &scope_options, options).await?;
         }
         [profile, start, options @ ..] if profile == "profile" && start == "start" => {
             let sampling_interval_micros = parse_cpu_profile_start_options(options)?;
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             let scope =
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
             rpc(client
@@ -676,7 +737,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         [profile, stop, options @ ..] if profile == "profile" && stop == "stop" => {
             let capture_id = parse_cpu_profile_stop_options(options)?;
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             let scope =
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
             let profile = rpc(client
@@ -687,7 +748,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         [profile, show, options @ ..] if profile == "profile" && show == "show" => {
             let options = parse_cpu_profile_show_options(options)?;
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             let context =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
             show_stored_cpu_profile(&client, &output, context, &scope_options, options).await?;
@@ -695,7 +756,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         [profile, export, options @ ..] if profile == "profile" && export == "export" => {
             let options = parse_cpu_profile_export_options(options)?;
             let destination = absolute_path(Path::new(&options.output))?;
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             let context =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
             let profile = rpc(client
@@ -714,7 +775,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         [heap, capture, options @ ..] if heap == "heap" && capture == "capture" => {
             let options = parse_heap_capture_options(options)?;
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             let scope =
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
             let call = rpc(client
@@ -733,7 +794,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         [heap, classes, options @ ..] if heap == "heap" && classes == "classes" => {
             let mut options = parse_heap_class_options(options)?;
             let mut capture_id = options.capture_id.clone();
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             let selection = load_selection(&selection_file)?;
             if options.capture {
                 let scope = resolve_scope(&client, &selection, &scope_options).await?;
@@ -764,7 +825,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 })?
                 .to_string();
             let source_map = tokio::fs::read_to_string(map_path).await?;
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             let context =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
             rpc(client
@@ -783,13 +844,13 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             output.print_heap_map_supplied(capture, script)?;
         }
         [capture, list] if capture == "capture" && list == "list" => {
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             let context =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
             output.print(&rpc(client.captures.list_captures(context).await)?)?;
         }
         [capture, show, name] if capture == "capture" && show == "show" => {
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             let context =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
             let capture = rpc(client
@@ -844,7 +905,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         [capture, delete, name] if capture == "capture" && delete == "delete" => {
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             let context =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
             output.print(&rpc(client
@@ -854,7 +915,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         [heap, select, options @ ..] if heap == "heap" && select == "select" => {
             let options = parse_heap_select_options(options)?;
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             let selection = load_selection(&selection_file)?;
             let scope = resolve_offline_scope(&client, &selection, &scope_options).await?;
             let selection = rpc(client
@@ -871,7 +932,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         [heap, strings, options @ ..] if heap == "heap" && strings == "strings" => {
             let options = parse_heap_string_options(options)?;
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             let selection = load_selection(&selection_file)?;
             let scope = resolve_offline_scope(&client, &selection, &scope_options).await?;
             let selection = rpc(client
@@ -888,7 +949,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         [promise, list, options @ ..] if promise == "promise" && list == "list" => {
             let options = parse_promise_list_options(options)?;
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             let scope = resolve_offline_scope(
                 &client,
                 &load_selection(&selection_file)?,
@@ -909,7 +970,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         [heap, show, reference, options @ ..] if heap == "heap" && show == "show" => {
             let options = parse_heap_show_options(options)?;
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             let selection = load_selection(&selection_file)?;
             let scope = resolve_offline_scope(&client, &selection, &scope_options).await?;
             let properties = rpc(client
@@ -927,7 +988,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         [heap, refs, reference, options @ ..] if heap == "heap" && refs == "refs" => {
             let options = parse_heap_reference_options(options)?;
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             let selection = load_selection(&selection_file)?;
             let scope = resolve_offline_scope(&client, &selection, &scope_options).await?;
             let references = rpc(client
@@ -945,7 +1006,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         [heap, path, from, to, options @ ..] if heap == "heap" && path == "path" => {
             let options = parse_heap_path_options(options)?;
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             let selection = load_selection(&selection_file)?;
             let scope = resolve_offline_scope(&client, &selection, &scope_options).await?;
             let path = rpc(client
@@ -974,7 +1035,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         {
             let options = parse_heap_path_options(options)?;
             let (capture_id, _) = split_heap_reference_cli(reference)?;
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             let selection = load_selection(&selection_file)?;
             let scope = resolve_offline_scope(&client, &selection, &scope_options).await?;
             let root = rpc(client
@@ -1021,7 +1082,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let mut options = parse_heap_path_options(options)?;
             options.path.direction = HeapPathDirection::Incoming;
             let (capture_id, _) = split_heap_reference_cli(reference)?;
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             let selection = load_selection(&selection_file)?;
             let scope = resolve_offline_scope(&client, &selection, &scope_options).await?;
             let root = rpc(client
@@ -1066,7 +1127,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             if heap == "heap" && dominators == "dominators" =>
         {
             let max_string_length = parse_heap_string_display_options(options)?;
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             let selection = load_selection(&selection_file)?;
             let scope = resolve_offline_scope(&client, &selection, &scope_options).await?;
             let chain = rpc(client
@@ -1077,7 +1138,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         [heap, aggregate, options @ ..] if heap == "heap" && aggregate == "aggregate" => {
             let options = parse_heap_aggregate_options(options)?;
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             let selection = load_selection(&selection_file)?;
             let scope = resolve_offline_scope(&client, &selection, &scope_options).await?;
             let aggregate = rpc(client
@@ -1094,7 +1155,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         [heap, diff, older, newer, options @ ..] if heap == "heap" && diff == "diff" => {
             let options = parse_heap_diff_options(options)?;
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             let selection = load_selection(&selection_file)?;
             let scope = resolve_offline_scope(&client, &selection, &scope_options).await?;
             let diff = rpc(client
@@ -1113,7 +1174,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         [heap, snapshot, path, options @ ..] if heap == "heap" && snapshot == "snapshot" => {
             let options = parse_heap_snapshot_options(options)?;
             let destination = absolute_path(Path::new(path))?;
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             let scope =
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
             let call = rpc(client
@@ -1130,7 +1191,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             output.print(&result)?;
         }
         [target, watch, expression] if target == "target" && watch == "watch" => {
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             let mut selection = load_selection(&selection_file)?;
             let scope = resolve_scope(&client, &selection, &scope_options).await?;
             if !selection.watches.contains(expression) {
@@ -1141,35 +1202,36 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             print_target_with_watches(&output, &client, &selection, &scope, &snapshot).await?;
         }
         [service, start] if service == "service" && start == "start" => {
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             output.print(&rpc(client.service.service_info().await)?)?;
         }
         [service, status] if service == "service" && status == "status" => {
-            let client = connect_existing(&state_file).await?;
+            let client = connect_existing(&service_target).await?;
             output.print(&rpc(client.service.service_info().await)?)?;
         }
         [service, stop] if service == "service" && stop == "stop" => {
-            let client = connect_existing(&state_file).await?;
+            let client = connect_existing(&service_target).await?;
             output.print(&rpc(client.service.shutdown().await)?)?;
         }
         [process, list, options @ ..] if process == "process" && list == "list" => {
             let options = parse_process_list_options(options)?;
-            let mut trees =
-                dbgjs::connection::discovery::process_discovery::discover_process_trees(options.root_kind, options.stats)
-                    .await?;
-            if options.full {
-                dbgjs::connection::discovery::process_discovery::populate_process_tree_targets(&mut trees).await;
-                if let Ok(client) = connect_existing(&state_file).await
-                    && let Ok(contexts) = client.contexts.list_contexts(None).await
-                {
-                    let mut snapshots = Vec::new();
-                    for context in contexts {
-                        if let Ok(snapshot) = client.contexts.get_context(context.id).await {
-                            snapshots.push(snapshot);
-                        }
+            let client = ensure_service(&service_target).await?;
+            let mut trees = rpc(
+                client
+                    .service
+                    .discover_process_trees(Some(options.root_kind), options.stats, options.full)
+                    .await,
+            )?;
+            if options.full
+                && let Ok(contexts) = client.contexts.list_contexts(None).await
+            {
+                let mut snapshots = Vec::new();
+                for context in contexts {
+                    if let Ok(snapshot) = client.contexts.get_context(context.id).await {
+                        snapshots.push(snapshot);
                     }
-                    output::project_process_tree_target_attachments(&mut trees, &snapshots);
                 }
+                output::project_process_tree_target_attachments(&mut trees, &snapshots);
             }
             output.print_process_trees(
                 &trees,
@@ -1186,23 +1248,27 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let options = parse_process_attach_options(arguments)?;
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
-            let discovered = if matches!(
+            let client = ensure_service(&service_target).await?;
+            let root_kind = matches!(
                 options.locator,
                 ProcessAttachLocator::VscodeProcess { .. }
                     | ProcessAttachLocator::VscodeWindow { .. }
-            ) {
-                dbgjs::connection::discovery::process_discovery::discover_vscode_process_trees(false).await?
-            } else {
-                dbgjs::connection::discovery::process_discovery::discover_recognized_process_trees().await?
-            };
+            )
+            .then_some(ProcessRootKind::Vscode);
+            let discovered = rpc(
+                client
+                    .service
+                    .discover_process_trees(root_kind, false, false)
+                    .await,
+            )?;
             let (connection_id, configuration, target) =
                 process_attach_destination(options.locator, &discovered)?;
-            let client = ensure_service(&state_file).await?;
             let context = rpc(client.contexts.get_context(context_id.clone()).await)?;
             let existing = context
                 .connections
                 .iter()
                 .find(|connection| connection.id == connection_id);
+            let reused = existing.is_some();
             let connected = existing.is_some_and(|connection| {
                 matches!(
                     connection.status,
@@ -1228,7 +1294,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     })
                     .await)?;
             }
-            if !connected
+            let context = if !connected
                 || existing.is_some_and(|connection| connection.configuration != configuration)
             {
                 rpc(client
@@ -1241,58 +1307,80 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                         configuration,
                     )
                     .await)?;
-                rpc(client
+                rpc(with_slow_connection_hint(&connection_id, client
                     .contexts
                     .connect_connection(dbgjs::api::service_api::ConnectionRef {
                         context_id: context_id.clone(),
                         connection_id: connection_id.clone(),
-                    })
-                    .await)?;
-            }
-            let target_id = match target {
-                ProcessAttachTarget::Renderer(selector) => {
-                    resolve_renderer_target_id(&client, &context_id, &connection_id, selector)
-                        .await?
-                }
-                ProcessAttachTarget::Target(target_id) if target_id == "$node-root" => {
-                    synthetic_node_target_id(&connection_id)
-                }
-                ProcessAttachTarget::Target(target_id) => target_id,
+                    }))
+                    .await)?
+            } else {
+                context
             };
-            if target_id != synthetic_node_target_id(&connection_id) {
-                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-                loop {
-                    let context = rpc(client.contexts.get_context(context_id.clone()).await)?;
-                    if context.target_forest.iter().any(|node| {
-                        node.connection_id == connection_id && node.target.target_id == target_id
-                    }) {
-                        break;
-                    }
-                    if std::time::Instant::now() >= deadline {
-                        return Err(format!(
-                            "renderer target {target_id} was not published within 10 seconds"
-                        )
-                        .into());
-                    }
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                }
+            let connection = context.connections.iter()
+                .find(|connection| connection.id == connection_id)
+                .ok_or_else(|| io::Error::other("process connection disappeared during setup"))?;
+            if !matches!(connection.status, ConnectionStatus::Connected { .. }) {
+                return Err(io::Error::other(format!(
+                    "process connection setup failed for {connection_id:?} in context {context_id:?}: {}",
+                    output::connection_status(&connection.status),
+                )).into());
             }
-            let result = rpc(client
-                .targets
-                .attach_target(
-                    dbgjs::api::service_api::TargetRef {
-                        connection: dbgjs::api::service_api::ConnectionRef {
-                            context_id: context_id.clone(),
-                            connection_id: connection_id.clone(),
+            let attachment = async {
+                let target_id = match target {
+                    ProcessAttachTarget::Renderer(selector) => {
+                        resolve_renderer_target_id(&client, &context_id, &connection_id, selector)
+                            .await?
+                    }
+                    ProcessAttachTarget::Target(target_id) if target_id == "$node-root" => {
+                        synthetic_node_target_id(&connection_id)
+                    }
+                    ProcessAttachTarget::Target(target_id) => target_id,
+                };
+                if target_id != synthetic_node_target_id(&connection_id) {
+                    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                    loop {
+                        let context = rpc(client.contexts.get_context(context_id.clone()).await)?;
+                        if context.target_forest.iter().any(|node| {
+                            node.connection_id == connection_id && node.target.target_id == target_id
+                        }) {
+                            break;
+                        }
+                        if std::time::Instant::now() >= deadline {
+                            return Err(format!(
+                                "renderer target {target_id} was not published within 10 seconds"
+                            )
+                            .into());
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    }
+                }
+                let result = rpc(client
+                    .targets
+                    .attach_target(
+                        dbgjs::api::service_api::TargetRef {
+                            connection: dbgjs::api::service_api::ConnectionRef {
+                                context_id: context_id.clone(),
+                                connection_id: connection_id.clone(),
+                            },
+                            target_id: target_id.clone(),
                         },
-                        target_id: target_id.clone(),
-                    },
-                    TargetAttachOptions {
-                        force: options.force,
-                        expected_connection_generation: None,
-                    },
-                )
-                .await)?;
+                        TargetAttachOptions {
+                            force: options.force,
+                            expected_connection_generation: None,
+                        },
+                    )
+                    .await)?;
+                Ok::<_, Box<dyn std::error::Error>>((target_id, result))
+            }.await;
+            let (target_id, result) = match attachment {
+                Ok(result) => result,
+                Err(error) => {
+                    return Err(process_attach_failure(
+                        &client, &context_id, &connection_id, reused, error,
+                    ).await.into());
+                }
+            };
             if options.set_default {
                 select_scope(
                     &selection_file,
@@ -1307,7 +1395,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             output.print(&result)?;
         }
         [context, list] if context == "context" && list == "list" => {
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             output.print(&rpc(client
                 .contexts
                 .list_contexts(Some(normalized_cwd.clone()))
@@ -1317,7 +1405,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let options = parse_connection_list_options(options)?;
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             let snapshot = rpc(client.contexts.get_context(context_id).await)?;
             let selection = load_selection(&selection_file)?;
             output.print(&connection_list_output(
@@ -1334,38 +1422,65 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 id: context_id,
                 kind,
             } = resolve_context_expression(&expression, &cwd)?;
-            let client = ensure_service(&state_file).await?;
-            let snapshot = rpc(client
+            let client = ensure_service(&service_target).await?;
+            let mut snapshot = rpc(client
                 .contexts
                 .put_context(context_id.clone(), kind, display_name)
                 .await)?;
+            if let Some(timeout) = idle_timeout {
+                snapshot = rpc(client.contexts.set_context_idle_timeout(
+                    context_id.clone(), timeout.ok_or_else(|| io::Error::other("a context timeout cannot inherit"))?,
+                ).await)?;
+            }
+            record_context_service(&selection_file, &normalized_cwd, &context_id, Some(&service_target))?;
             if set_default {
                 select_context(&selection_file, &context_id)?;
             }
             output.print(&snapshot)?;
         }
+        [context, configure] if context == "context" && configure == "configure" => {
+            let context_id = selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
+            let timeout = idle_timeout.flatten().ok_or_else(|| io::Error::new(
+                io::ErrorKind::InvalidInput, "context configure requires --idle-timeout <duration|inf>",
+            ))?;
+            let client = ensure_service(&service_target).await?;
+            output.print(&rpc(client.contexts.set_context_idle_timeout(context_id, timeout).await)?)?;
+        }
+        [connection, configure] if connection == "connection" && configure == "configure" => {
+            let context_id = selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
+            let connection_id = required_option("--connection", scope_options.connection.as_ref())?;
+            let timeout = idle_timeout.ok_or_else(|| io::Error::new(
+                io::ErrorKind::InvalidInput, "connection configure requires --idle-timeout <duration|inf|inherit>",
+            ))?;
+            let client = ensure_service(&service_target).await?;
+            output.print(&rpc(client.contexts.set_connection_idle_timeout(
+                dbgjs::api::service_api::ConnectionRef { context_id, connection_id: connection_id.to_owned() },
+                timeout,
+            ).await)?)?;
+        }
         [context, show] if context == "context" && show == "show" => {
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             output.print(&rpc(client.contexts.get_context(context_id).await)?)?;
         }
         [context, delete, options @ ..] if context == "context" && delete == "delete" => {
             let mutation = parse_mutation_options(options)?;
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             let deleted = rpc(client
                 .contexts
                 .delete_context(context_id.clone(), mutation)
                 .await)?;
+            record_context_service(&selection_file, &normalized_cwd, &context_id, None)?;
             output.print_context_deleted(&context_id, deleted)?;
         }
         [context, relay, options @ ..] if context == "context" && relay == "relay" => {
             parse_relay_options(options)?;
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             let relay = rpc(client.relay.open_context_relay(context_id).await)?;
             let result = run_relay_stdio(&relay.websocket_url).await;
             let _ = client.relay.close_relay(relay.id).await;
@@ -1374,13 +1489,13 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         [state, get] if state == "state" && get == "get" => {
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             output.print(&rpc(client.contexts.get_context(context_id).await)?)?;
         }
         [state, watch, options @ ..] if state == "state" && watch == "watch" => {
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             let mut cursor = parse_observation_cursor(options)?;
             loop {
                 match rpc(client
@@ -1406,7 +1521,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         [events, after, revision] if events == "events" && after == "--after-revision" => {
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             output.print(&rpc(client
                 .contexts
                 .observe_context(
@@ -1434,10 +1549,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     process_id: parse_u32("process ID", process_id)?,
                 },
                 true,
-                &state_file,
+                &service_target,
                 &selection_file,
                 false,
                 output,
+                idle_timeout,
             )
             .await?;
         }
@@ -1457,10 +1573,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     root_pid: parse_u32("root process ID", root_pid)?,
                 },
                 true,
-                &state_file,
+                &service_target,
                 &selection_file,
                 false,
                 output,
+                idle_timeout,
             )
             .await?;
         }
@@ -1480,10 +1597,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     endpoint: endpoint.clone(),
                 },
                 true,
-                &state_file,
+                &service_target,
                 &selection_file,
                 false,
                 output,
+                idle_timeout,
             )
             .await?;
         }
@@ -1500,10 +1618,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     endpoint: endpoint.clone(),
                 },
                 true,
-                &state_file,
+                &service_target,
                 &selection_file,
                 false,
                 output,
+                idle_timeout,
             )
             .await?;
         }
@@ -1518,10 +1637,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     endpoint: endpoint.clone(),
                 },
                 false,
-                &state_file,
+                &service_target,
                 &selection_file,
                 false,
                 output,
+                idle_timeout,
             )
             .await?;
         }
@@ -1543,10 +1663,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     ignore_https_errors: options.ignore_https_errors,
                 },
                 options.connect,
-                &state_file,
+                &service_target,
                 &selection_file,
                 options.set_default,
                 output,
+                idle_timeout,
             )
             .await?;
         }
@@ -1568,10 +1689,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     args: options.args,
                 },
                 options.connect,
-                &state_file,
+                &service_target,
                 &selection_file,
                 options.set_default,
                 output,
+                idle_timeout,
             )
             .await?;
         }
@@ -1594,10 +1716,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     env: options.env,
                 },
                 options.connect,
-                &state_file,
+                &service_target,
                 &selection_file,
                 options.set_default,
                 output,
+                idle_timeout,
             )
             .await?;
         }
@@ -1619,29 +1742,32 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     topology: options.topology,
                 },
                 options.connect,
-                &state_file,
+                &service_target,
                 &selection_file,
                 options.set_default,
                 output,
+                idle_timeout,
             )
             .await?;
         }
         [connection, connect] if connection == "connection" && connect == "connect" => {
             let (context_id, connection_id) =
                 selected_or_explicit_connection(&selection_file, &scope_options)?;
-            let client = ensure_service(&state_file).await?;
-            output.print(&rpc(client
+            let client = ensure_service(&service_target).await?;
+            let context = rpc(with_slow_connection_hint(&connection_id, client
                 .contexts
                 .connect_connection(dbgjs::api::service_api::ConnectionRef {
                     context_id: context_id,
-                    connection_id: connection_id,
-                })
-                .await)?)?;
+                    connection_id: connection_id.clone(),
+                }))
+                .await)?;
+            require_connected(&context, &connection_id)?;
+            output.print(&context)?;
         }
         [connection, disconnect] if connection == "connection" && disconnect == "disconnect" => {
             let (context_id, connection_id) =
                 selected_or_explicit_connection(&selection_file, &scope_options)?;
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             output.print(&rpc(client
                 .contexts
                 .disconnect_connection(dbgjs::api::service_api::ConnectionRef {
@@ -1666,7 +1792,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             };
             let (context_id, connection_id) =
                 selected_or_explicit_connection(&selection_file, &scope_options)?;
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             let enabled = rpc(client
                 .contexts
                 .set_pause_future_children(
@@ -1689,7 +1815,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         [connection, delete, options @ ..] if connection == "connection" && delete == "delete" => {
             let (context_id, connection_id) =
                 selected_or_explicit_connection(&selection_file, &scope_options)?;
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             output.print(&rpc(client
                 .contexts
                 .delete_connection(
@@ -1710,7 +1836,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 line,
                 "1",
                 &selection_file,
-                &state_file,
+                &service_target,
                 &scope_options,
                 output,
             )
@@ -1731,7 +1857,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 line,
                 column,
                 &selection_file,
-                &state_file,
+                &service_target,
                 &scope_options,
                 output,
             )
@@ -1750,7 +1876,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
             let (specification, mutation) =
                 parse_breakpoint_spec(source_path, line, column, options)?;
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             let context = rpc(client
                 .contexts
                 .put_breakpoint_spec(context_id, breakpoint_id.clone(), specification, mutation)
@@ -1762,7 +1888,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         {
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             output.print(&rpc(client
                 .contexts
                 .delete_breakpoint(
@@ -1777,7 +1903,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         {
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             let context = rpc(client.contexts.get_context(context_id).await)?;
             output.print(&context.source_formatting)?;
         }
@@ -1786,7 +1912,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         {
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             output.print(&rpc(client
                 .sources
                 .set_source_formatting(context_id, parse_source_formatting_mode(mode)?)
@@ -1800,7 +1926,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         {
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             let context = rpc(client.contexts.get_context(context_id).await)?;
             output.print(&context.source_formatting)?;
         }
@@ -1813,7 +1939,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let (mode, target_pattern, url_pattern) = parse_source_formatting_rule(arguments)?;
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             output.print(&rpc(client
                 .sources
                 .add_source_formatting_rule(context_id, mode, target_pattern, url_pattern)
@@ -1827,7 +1953,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         {
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             output.print(&rpc(client
                 .sources
                 .delete_source_formatting_rule(context_id, rule_id.clone())
@@ -1836,7 +1962,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         [source, list, options @ ..] if source == "source" && list == "list" => {
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             output.print(&rpc(client
                 .sources
                 .list_sources(context_id, parse_source_list_options(options)?)
@@ -1846,13 +1972,13 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let (kind, options) = parse_source_tree_options(arguments)?;
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             let tree = rpc(client.sources.show_source_tree(context_id, kind).await)?;
             output.print_source_tree(&tree, options)?;
         }
         [source, resolve, arguments @ ..] if source == "source" && resolve == "resolve" => {
             let path = parse_source_path_arguments(arguments, "source resolve")?;
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
             output.print(&rpc(client
@@ -1862,7 +1988,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         [source, endpoints, arguments @ ..] if source == "source" && endpoints == "endpoints" => {
             let path = parse_source_path_arguments(arguments, "source endpoints")?;
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
             output.print(&rpc(client
@@ -1872,7 +1998,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         [source, show, arguments @ ..] if source == "source" && show == "show" => {
             let (path, options) = parse_source_show_options(arguments)?;
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
             output.print(&rpc(client
@@ -1883,7 +2009,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         [source, grep, arguments @ ..] if source == "source" && grep == "grep" => {
             let (options, max_output_bytes, max_line_bytes, verbose_diagnostics) =
                 parse_source_grep_cli_options(arguments)?;
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
             let snapshot = rpc(client
@@ -1897,13 +2023,13 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         [source, explain, arguments @ ..] if source == "source" && explain == "explain" => {
             let path = parse_source_path_arguments(arguments, "source explain")?;
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
             output.print(&rpc(client.sources.explain_source(context_id, path).await)?)?;
         }
         [source, graph] if source == "source" && graph == "graph" => {
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
             output.print(&rpc(client.sources.show_source_graph(context_id).await)?)?;
@@ -1911,7 +2037,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         [source, graph, uncompacted]
             if source == "source" && graph == "graph" && uncompacted == "--uncompacted" =>
         {
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
             output.print(&rpc(client
@@ -1920,14 +2046,14 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 .await)?)?;
         }
         [source, map, show] if source == "source" && map == "map" && show == "show" => {
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
             output.print(&rpc(client.sources.show_source_graph(context_id).await)?)?;
         }
         [source, map, arguments @ ..] if source == "source" && map == "map" => {
             let (path, line, column) = parse_source_map_arguments(arguments)?;
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
             output.print(&rpc(client
@@ -1938,13 +2064,13 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         [source, cache, evict] if source == "source" && cache == "cache" && evict == "evict" => {
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             output.print(&rpc(client.sources.evict_source_caches(context_id).await)?)?;
         }
         [source, export, destination] if source == "source" && export == "export" => {
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             output.print(&rpc(client
                 .sources
                 .export_sources(context_id, destination.clone())
@@ -1954,7 +2080,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let options = parse_target_list_options(options)?;
             let context_id =
                 selected_or_explicit_context(&selection_file, scope_options.context.clone())?;
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             let snapshot = rpc(client.contexts.get_context(context_id).await)?;
             let selection = load_selection(&selection_file)?;
             output.print(&target_list_output(
@@ -1966,7 +2092,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         [target, attach, options @ ..] if target == "target" && attach == "attach" => {
             let options = parse_attach_options(options)?;
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             let scope =
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
             let result = rpc(client
@@ -1987,7 +2113,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         [target, wait, installed, breakpoint_id]
             if target == "target" && wait == "wait" && installed == "breakpoint-installed" =>
         {
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             let scope =
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
             wait_target(
@@ -1998,7 +2124,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     breakpoint_id: breakpoint_id.clone(),
                 },
                 "30000",
-                &state_file,
+                &service_target,
                 output,
             )
             .await?;
@@ -2006,7 +2132,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         [target, wait, installed, breakpoint_id, timeout_ms]
             if target == "target" && wait == "wait" && installed == "breakpoint-installed" =>
         {
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             let scope =
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
             wait_target(
@@ -2017,7 +2143,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     breakpoint_id: breakpoint_id.clone(),
                 },
                 timeout_ms,
-                &state_file,
+                &service_target,
                 output,
             )
             .await?;
@@ -2025,7 +2151,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         [target, wait, paused, after_epoch]
             if target == "target" && wait == "wait" && paused == "paused" =>
         {
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             let scope =
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
             wait_target(
@@ -2036,7 +2162,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     after_epoch: parse_u64("pause epoch", after_epoch)?,
                 },
                 "30000",
-                &state_file,
+                &service_target,
                 output,
             )
             .await?;
@@ -2044,7 +2170,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         [target, wait, paused, after_epoch, timeout_ms]
             if target == "target" && wait == "wait" && paused == "paused" =>
         {
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             let scope =
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
             wait_target(
@@ -2055,13 +2181,13 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     after_epoch: parse_u64("pause epoch", after_epoch)?,
                 },
                 timeout_ms,
-                &state_file,
+                &service_target,
                 output,
             )
             .await?;
         }
         [target, wait, running] if target == "target" && wait == "wait" && running == "running" => {
-            let client = ensure_service(&state_file).await?;
+            let client = ensure_service(&service_target).await?;
             let scope =
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
             wait_target(
@@ -2070,7 +2196,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 &scope.target,
                 TargetWaitPredicate::Running,
                 "30000",
-                &state_file,
+                &service_target,
                 output,
             )
             .await?;
@@ -2104,6 +2230,9 @@ struct SelectionStore {
     schema_version: u32,
     #[serde(default)]
     cwd_bindings: BTreeMap<String, String>,
+    /// Context id → the remote service it lives in. Contexts without an entry are local.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    context_services: BTreeMap<String, RemoteServiceEndpoint>,
     #[serde(default)]
     active_scopes: BTreeMap<String, String>,
     #[serde(default)]
@@ -2591,7 +2720,7 @@ fn scope_option_kind(arguments: &[String]) -> ScopeOptionKind {
         (Some("context" | "state" | "events" | "source" | "capture"), _)
         | (Some("breakpoint"), _)
         | (Some("daemon"), Some("view"))
-        | (Some("process"), Some("attach"))
+        | (Some("process"), Some("list" | "attach"))
         | (Some("set"), Some("context" | "workspace")) => ScopeOptionKind {
             context: true,
             connection: false,
@@ -2619,6 +2748,9 @@ fn command_requires_context(arguments: &[String]) -> bool {
             if context == "context" && matches!(operation.as_str(), "create" | "list")
     ) && !matches!(
         arguments,
+        [process, list, ..] if process == "process" && list == "list"
+    ) && !matches!(
+        arguments,
         [daemon, view, options @ ..]
             if daemon == "daemon"
                 && view == "view"
@@ -2640,14 +2772,29 @@ fn parse_daemon_view_options(arguments: &[String]) -> Result<bool, io::Error> {
     }
 }
 
+const SCOPE_OPTIONS: [&str; 3] = ["--context", "--connection", "--target"];
+
+/// The command words of `arguments`: scope options may precede the command
+/// (`dbgjs --context :x process list`), so skip leading option/value pairs.
+fn command_words(arguments: &[String]) -> &[String] {
+    let mut command = arguments;
+    while let [option, _value, rest @ ..] = command
+        && SCOPE_OPTIONS.contains(&option.as_str())
+    {
+        command = rest;
+    }
+    command
+}
+
 fn extract_scope_options(arguments: &mut Vec<String>) -> Result<ScopeOptions, io::Error> {
-    let kind = scope_option_kind(arguments);
+    let command = command_words(arguments);
+    let kind = scope_option_kind(command);
     let preserve_delimiter = matches!(
-        arguments.as_slice(),
+        command,
         [connection, add, stdio, ..]
             if connection == "connection" && add == "add" && stdio == "--stdio"
     ) || matches!(
-        arguments.as_slice(),
+        command,
         [target, eval, ..] if target == "target" && eval == "eval"
     );
     let mut options = ScopeOptions::default();
@@ -2683,6 +2830,15 @@ fn extract_scope_options(arguments: &mut Vec<String>) -> Result<ScopeOptions, io
         }
         *slot = Some(arguments.remove(index + 1));
         arguments.remove(index);
+    }
+    if let Some(option) = arguments
+        .first()
+        .filter(|argument| SCOPE_OPTIONS.contains(&argument.as_str()))
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{option} is not accepted by this command"),
+        ));
     }
     Ok(options)
 }
@@ -2870,6 +3026,156 @@ fn nearest_binding<'a>(store: &'a SelectionStore, cwd: &str) -> Option<(&'a str,
                 .get_key_value(&directory)
                 .map(|(binding, context)| (binding.as_str(), context))
         })
+}
+
+const SERVICE_ENDPOINT_ENV: &str = "DBGJS_SERVICE_ENDPOINT";
+const SERVICE_ID_ENV: &str = "DBGJS_SERVICE_ID";
+/// `--service-endpoint local` selects the local daemon, overriding env vars and cwd bindings.
+const LOCAL_SERVICE_ENDPOINT: &str = "local";
+
+/// The global `--service-endpoint` / `--service-id` options.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct ServiceOptions {
+    endpoint: Option<String>,
+    service_id: Option<String>,
+}
+
+impl ServiceOptions {
+    /// The remote service named by the options themselves, ignoring env vars and bindings.
+    fn explicit_remote(&self) -> Result<Option<RemoteServiceEndpoint>, io::Error> {
+        match self.endpoint.as_deref() {
+            None if self.service_id.is_some() => Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "--service-id requires --service-endpoint",
+            )),
+            None | Some(LOCAL_SERVICE_ENDPOINT) => Ok(None),
+            Some(endpoint) => Ok(Some(RemoteServiceEndpoint {
+                endpoint: endpoint.to_owned(),
+                service_id: self.service_id.clone(),
+            })),
+        }
+    }
+}
+
+fn extract_service_options(arguments: &mut Vec<String>) -> Result<ServiceOptions, io::Error> {
+    let mut options = ServiceOptions::default();
+    let mut index = 0;
+    while index < arguments.len() && arguments[index] != "--" {
+        let (slot, option) = match arguments[index].as_str() {
+            "--service-endpoint" => (&mut options.endpoint, "--service-endpoint"),
+            "--service-id" => (&mut options.service_id, "--service-id"),
+            _ => {
+                index += 1;
+                continue;
+            }
+        };
+        if slot.is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("{option} may only be specified once"),
+            ));
+        }
+        let value = arguments
+            .get(index + 1)
+            .filter(|value| !value.is_empty())
+            .cloned()
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidInput, format!("{option} requires a value"))
+            })?;
+        *slot = Some(value);
+        arguments.drain(index..index + 2);
+    }
+    Ok(options)
+}
+
+/// Resolve where the debugger service lives: explicit options, then the
+/// `DBGJS_SERVICE_ENDPOINT` / `DBGJS_SERVICE_ID` env options, then the service recorded for
+/// `context` (see [`cli_side_context`]), then the local daemon.
+fn resolve_service_target(
+    options: &ServiceOptions,
+    env_options: &ServiceOptions,
+    local_state_file: std::path::PathBuf,
+    store: &SelectionStore,
+    context: Option<&str>,
+) -> Result<ServiceTarget, io::Error> {
+    let remote = if options.endpoint.is_some() {
+        options.explicit_remote()?
+    } else if env_options.endpoint.is_some() {
+        env_options.explicit_remote()?
+    } else {
+        context.and_then(|context| store.context_services.get(context)).cloned()
+    };
+    Ok(match remote {
+        Some(mut remote) => {
+            if let Some(service_id) = &options.service_id {
+                remote.service_id = Some(service_id.clone());
+            }
+            ServiceTarget::Remote(remote)
+        }
+        None if options.endpoint.is_none() && options.service_id.is_some() => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "--service-id requires a service endpoint (--service-endpoint, DBGJS_SERVICE_ENDPOINT, or a context created on a remote service)",
+            ));
+        }
+        None => ServiceTarget::Local {
+            state_file: local_state_file,
+        },
+    })
+}
+
+fn service_options_from_env() -> ServiceOptions {
+    ServiceOptions {
+        endpoint: env::var(SERVICE_ENDPOINT_ENV).ok().filter(|v| !v.is_empty()),
+        service_id: env::var(SERVICE_ID_ENV).ok().filter(|v| !v.is_empty()),
+    }
+}
+
+/// The context the CLI can determine without asking a service, used to pick the service: the
+/// explicit `--context`, else the nearest cwd binding, else the nearest ancestor path context
+/// recorded on a remote service. Path contexts of the local daemon are found by asking it.
+fn cli_side_context(store: &SelectionStore, cwd: &str, explicit: Option<&str>) -> Option<String> {
+    if let Some(explicit) = explicit {
+        return Some(explicit.to_owned());
+    }
+    if let Some((_, context)) = nearest_binding(store, cwd) {
+        return Some(context.clone());
+    }
+    path_and_parents(cwd)
+        .ok()?
+        .into_iter()
+        .find(|directory| store.context_services.contains_key(directory))
+}
+
+/// Record that `context_id` lives in `service_target` (local contexts have no entry).
+fn record_context_service(
+    selection_file: &Path,
+    cwd: &str,
+    context_id: &str,
+    service_target: Option<&ServiceTarget>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut store = load_selection_store(selection_file, cwd)?;
+    match service_target {
+        Some(ServiceTarget::Remote(remote)) => {
+            store
+                .context_services
+                .insert(context_id.to_owned(), remote.clone());
+        }
+        Some(ServiceTarget::Local { .. }) | None => {
+            store.context_services.remove(context_id);
+        }
+    }
+    write_selection_store(selection_file, &store)
+}
+
+async fn ensure_service(service_target: &ServiceTarget) -> Result<DbgServiceClient, LocalRpcError> {
+    service_target.ensure().await
+}
+
+async fn connect_existing(
+    service_target: &ServiceTarget,
+) -> Result<DbgServiceClient, LocalRpcError> {
+    service_target.connect_existing().await
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -5592,13 +5898,13 @@ async fn put_selected_breakpoint(
     line: &str,
     column: &str,
     selection_file: &Path,
-    state_file: &Path,
+    service_target: &ServiceTarget,
     scope_options: &ScopeOptions,
     output: OutputFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let line = line.parse::<u32>()?;
     let column = column.parse::<u32>()?;
-    let client = ensure_service(state_file).await?;
+    let client = ensure_service(service_target).await?;
     let selection = load_selection(selection_file)?;
     let context_id = scope_options
         .context
@@ -5698,6 +6004,36 @@ async fn print_breakpoint_result(
 enum ProcessAttachTarget {
     Target(String),
     Renderer(RendererAttachSelector),
+}
+
+async fn process_attach_failure(
+    client: &DbgServiceClient,
+    context_id: &str,
+    connection_id: &str,
+    reused: bool,
+    error: Box<dyn std::error::Error>,
+) -> io::Error {
+    let details = match rpc(client.contexts.get_context(context_id.to_owned()).await) {
+        Ok(context) => match context.connections.iter().find(|connection| connection.id == connection_id) {
+            Some(connection) => {
+                let targets = context.target_forest.iter()
+                    .filter(|node| node.connection_id == connection_id)
+                    .map(|node| format!("  {:?}", node.target.target_id))
+                    .collect::<Vec<_>>();
+                format!(
+                    "{} connection {:?} in context {:?} is retained (status: {}).\nAvailable targets:\n{}",
+                    if reused { "reused" } else { "new" }, connection_id, context_id, output::connection_status(&connection.status),
+                    if targets.is_empty() { "  (none currently published)".to_owned() } else { targets.join("\n") },
+                )
+            }
+            None => "The connection is no longer present.".to_owned(),
+        },
+        Err(status_error) => format!("Could not refresh retained connection state: {status_error}"),
+    };
+    io::Error::other(format!(
+        "process connection setup succeeded, but target attachment failed: {error}\n{details}\nInspect with: dbgjs target list --context {:?} --connection {:?}\nDefault selection was not changed.",
+        format!(":{context_id}"), connection_id,
+    ))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -5910,15 +6246,47 @@ async fn wait_for_renderer_target_id(
     ).into()))
 }
 
+const SLOW_CONNECTION_HINT_DELAY: Duration = Duration::from_secs(3);
+
+/// Connecting can legitimately block on a person: request-based browser debugging holds the
+/// WebSocket handshake until the native approval dialog is answered. Say so instead of
+/// appearing hung. The hint goes to stderr so `--json` stdout stays machine-readable.
+async fn with_slow_connection_hint<F: std::future::Future>(connection_id: &str, connect: F) -> F::Output {
+    let mut connect = std::pin::pin!(connect);
+    tokio::select! {
+        output = &mut connect => return output,
+        _ = tokio::time::sleep(SLOW_CONNECTION_HINT_DELAY) => {}
+    }
+    eprintln!(
+        "dbgjs: still connecting '{connection_id}'. If the browser shows 'Allow remote debugging?', approve it there (waiting up to {} seconds).",
+        dbgjs::connection::transport::websocket_transport::CDP_HANDSHAKE_TIMEOUT.as_secs(),
+    );
+    connect.await
+}
+
+fn require_connected(context: &ContextSnapshot, connection_id: &str) -> Result<(), io::Error> {
+    let connection = context.connections.iter()
+        .find(|connection| connection.id == connection_id)
+        .ok_or_else(|| io::Error::other(format!("connection '{connection_id}' disappeared during setup")))?;
+    if !matches!(connection.status, ConnectionStatus::Connected { .. }) {
+        return Err(io::Error::other(format!(
+            "connection '{connection_id}' did not connect: {}; configuration retained for inspection/retry",
+            output::connection_status(&connection.status),
+        )));
+    }
+    Ok(())
+}
+
 async fn add_connection(
     context_id: &str,
     connection_id: &str,
     configuration: ConnectionConfiguration,
     connect_now: bool,
-    state_file: &std::path::Path,
+    service_target: &ServiceTarget,
     selection_file: &std::path::Path,
     set_default: bool,
     output: OutputFormat,
+    idle_timeout: Option<Option<IdleTimeout>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if set_default && !connect_now {
         return Err(io::Error::new(
@@ -5932,8 +6300,8 @@ async fn add_connection(
         ConnectionConfiguration::ProcessTree { .. }
             | ConnectionConfiguration::ScopedProcessTree { .. }
     );
-    let client = ensure_service(state_file).await?;
-    let configured = rpc(client
+    let client = ensure_service(service_target).await?;
+    let mut configured = rpc(client
         .contexts
         .put_connection(
             dbgjs::api::service_api::ConnectionRef {
@@ -5943,14 +6311,23 @@ async fn add_connection(
             configuration,
         )
         .await)?;
+    if let Some(timeout) = idle_timeout {
+        configured = rpc(client.contexts.set_connection_idle_timeout(
+            dbgjs::api::service_api::ConnectionRef {
+                context_id: context_id.to_owned(), connection_id: connection_id.to_owned(),
+            },
+            timeout,
+        ).await)?;
+    }
     if connect_now {
-        let mut connected = rpc(client
+        let mut connected = rpc(with_slow_connection_hint(connection_id, client
             .contexts
             .connect_connection(dbgjs::api::service_api::ConnectionRef {
                 context_id: context_id.to_owned(),
                 connection_id: connection_id.to_owned(),
-            })
+            }))
             .await)?;
+        require_connected(&connected, connection_id)?;
         if wait_for_initial_process_tree {
             let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
             let mut last_target_ids = Vec::new();
@@ -6359,11 +6736,11 @@ async fn wait_target(
     target_id: &str,
     predicate: TargetWaitPredicate,
     timeout_ms: &str,
-    state_file: &std::path::Path,
+    service_target: &ServiceTarget,
     output: OutputFormat,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let timeout_ms = parse_u64("timeout", timeout_ms)?;
-    let client = ensure_service(state_file).await?;
+    let client = ensure_service(service_target).await?;
     let snapshot = rpc(client
         .targets
         .wait_target(
@@ -6533,17 +6910,67 @@ fn parse_mutation_options(arguments: &[String]) -> Result<MutationOptions, io::E
 
 struct EvalOptions {
     expression: String,
-    max_preview_length: u32,
-    full: bool,
+    retain: bool,
+    await_result: bool,
+    timeout_ms: u64,
+    describe_options: DescribeOptions,
+    json: bool,
+    json_expect: bool,
+    describe: bool,
+    max_output_bytes: usize,
 }
 
 fn parse_eval_options(arguments: &[String], stdin: impl Read) -> Result<EvalOptions, io::Error> {
     let mut expression = Vec::new();
     let mut max_preview_length = None;
     let mut full = false;
+    let mut retain = false;
+    let mut await_result = false;
+    let mut timeout_ms = 2000;
+    let mut describe_options = DescribeOptions::default();
+    let mut json = false;
+    let mut json_expect = false;
+    let mut describe = false;
+    let mut max_output_bytes = 65_536;
     let mut index = 0;
     while index < arguments.len() {
         match arguments[index].as_str() {
+            "--retain" => retain = true,
+            "--await" => await_result = true,
+            "--json" => json = true,
+            "--json-expect" => json_expect = true,
+            "--describe" => describe = true,
+            "--max-output-bytes" => {
+                index += 1;
+                max_output_bytes = parse_u32_option(arguments, index, "--max-output-bytes")? as usize;
+                if max_output_bytes < 128 {
+                    return Err(io::Error::new(io::ErrorKind::InvalidInput, "--max-output-bytes must be at least 128"));
+                }
+            }
+            "--timeout" => {
+                index += 1;
+                let text = arguments.get(index).ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "--timeout requires a duration"))?;
+                let (number, scale) = if let Some(number) = text.strip_suffix("ms") { (number, 1.0) }
+                    else if let Some(number) = text.strip_suffix('s') { (number, 1000.0) }
+                    else { (text.as_str(), 1.0) };
+                let milliseconds = number.parse::<f64>().unwrap_or(f64::NAN) * scale;
+                if !milliseconds.is_finite() || !(0.0..=86_400_000.0).contains(&milliseconds) {
+                    return Err(io::Error::new(io::ErrorKind::InvalidInput, "timeout must be between 0ms and 86400s"));
+                }
+                timeout_ms = milliseconds.ceil() as u64;
+            }
+            "--max-depth" | "--max-properties" | "--max-nodes" | "--max-string-length" | "--start" => {
+                let flag = arguments[index].as_str();
+                index += 1;
+                let value = parse_u32_option(arguments, index, flag)?;
+                match flag {
+                    "--max-depth" => describe_options.max_depth = value,
+                    "--max-properties" => describe_options.max_properties = value,
+                    "--max-nodes" => describe_options.max_nodes = value,
+                    "--start" => describe_options.start = value,
+                    _ => describe_options.max_string_length = value,
+                }
+            }
             "--full" => full = true,
             "--max-preview-length" => {
                 index += 1;
@@ -6564,15 +6991,64 @@ fn parse_eval_options(arguments: &[String], stdin: impl Read) -> Result<EvalOpti
             "--full and --max-preview-length cannot be combined",
         ));
     }
+    if describe && (json || json_expect) {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "--describe cannot be combined with --json or --json-expect"));
+    }
     Ok(EvalOptions {
         expression: read_eval_expression(&expression, stdin)?,
-        max_preview_length: if full {
-            u32::MAX
-        } else {
-            max_preview_length.unwrap_or(DEFAULT_VALUE_PREVIEW_LENGTH)
+        retain, await_result, timeout_ms, json, json_expect, describe, max_output_bytes,
+        describe_options: DescribeOptions {
+            max_string_length: if full { u32::MAX } else { max_preview_length.unwrap_or(describe_options.max_string_length) },
+            ..describe_options
         },
-        full,
     })
+}
+
+fn print_owned_value(output: OutputFormat, value: &ValueDescription, json: bool, exact: bool, describe: bool, max_bytes: usize)
+    -> Result<(), Box<dyn std::error::Error>> {
+    if exact && value.kind == "rejection" {
+        return Err(io::Error::other(format!("evaluation rejected: {}", value.display())).into());
+    }
+    let mut text = if describe {
+        serde_json::to_string_pretty(value)?
+    } else if output.is_json() || json || exact {
+        let json = value.json(exact).map_err(|error| io::Error::other(
+            format!("{error}{}", value.reference.as_ref().map(|reference|
+                format!("; retained reference: {reference}")).unwrap_or_default())
+        ))?;
+        serde_json::to_string(&json)?
+    } else if let Some(scalar) = &value.value {
+        let mut text = scalar.as_str().map(str::to_owned).unwrap_or_else(|| scalar.to_string());
+        if let Some(reference) = &value.reference { text.push_str(&format!("\n{reference}")); }
+        if value.truncated { text.push_str("\n... (truncated)"); }
+        text
+    } else {
+        format!("{}{}", value.display(), output::render_object_source(&value.source))
+    };
+    if !describe && !output.is_json() && !json && !exact
+        && value.state.as_deref() == Some("pending")
+        && let Some(reference) = &value.reference
+    {
+        text.push_str(&format!("\nStill running; continue with: dbgjs value await {reference} --timeout 2s"));
+    }
+    if text.len() + 1 > max_bytes {
+        if exact || describe {
+            return Err(io::Error::other("value exceeds --max-output-bytes; increase the limit to export it").into());
+        }
+        text = if output.is_json() || json {
+            serde_json::to_string(&serde_json::json!({"$dbgjs": {
+                "kind": "limit", "truncated": true, "reference": value.reference
+            }}))?
+        } else {
+            format!("Output truncated by --max-output-bytes.{}", value.reference.as_ref()
+                .map(|r| format!(" Inspect {r} with a larger limit.")).unwrap_or_default())
+        };
+    }
+    println!("{text}");
+    if value.kind == "rejection" {
+        return Err(io::Error::other("evaluation rejected").into());
+    }
+    Ok(())
 }
 
 fn read_eval_expression(arguments: &[String], mut stdin: impl Read) -> Result<String, io::Error> {
@@ -6711,31 +7187,29 @@ async fn run_playwright_program(
     endpoint: &str,
     program: &str,
     target_id: &str,
-    deadline: tokio::time::Instant,
+    setup_deadline: tokio::time::Instant,
 ) -> Result<Option<serde_json::Value>, Box<dyn std::error::Error>> {
-    let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-    let helper_budget = remaining
-        .saturating_sub(CLEANUP_RESERVE)
-        .min(PLAYWRIGHT_EXECUTION_TIMEOUT.saturating_sub(CLEANUP_RESERVE));
-    if helper_budget.is_zero() {
+    let setup_budget = setup_deadline
+        .saturating_duration_since(tokio::time::Instant::now())
+        .saturating_sub(CLEANUP_RESERVE);
+    if setup_budget.is_zero() {
         return Err(io::Error::new(
             io::ErrorKind::TimedOut,
-            "Playwright starting exceeded its deadline",
+            format!("Playwright starting exceeded its deadline (target {target_id})"),
         )
         .into());
     }
     let playwright_package = dbgjs::connection::providers::find_playwright_package()?;
-    let node = env::var_os("DBGJS_NODE").unwrap_or_else(|| "node".into());
+    let node = dbgjs::connection::providers::node_executable::resolve_node_executable()?;
     let mut child = TokioCommand::new(&node)
         .arg("--input-type=module")
         .arg("--eval")
         .arg(PLAYWRIGHT_PAGE_HELPER)
         .env("DBGJS_PLAYWRIGHT_ENDPOINT", endpoint)
         .env("DBGJS_PLAYWRIGHT_PACKAGE", playwright_package)
-        .env("DBGJS_PLAYWRIGHT_PROGRESS", "1")
         .env(
-            "DBGJS_PLAYWRIGHT_TIMEOUT_MS",
-            helper_budget.as_millis().to_string(),
+            "DBGJS_PLAYWRIGHT_SETUP_TIMEOUT_MS",
+            setup_budget.as_millis().to_string(),
         )
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
@@ -6779,42 +7253,18 @@ async fn run_playwright_program(
 
     enum Completion {
         Exited(Result<std::process::ExitStatus, io::Error>),
-        TimedOut,
         OutputExceeded,
     }
-    let started = tokio::time::Instant::now();
     let completion = {
         let wait = child.wait();
         tokio::pin!(wait);
         tokio::select! {
             status = &mut wait => Completion::Exited(status),
-            _ = tokio::time::sleep_until(deadline - Duration::from_secs(2)) => Completion::TimedOut,
             Some(_) = overflow_receiver.recv() => Completion::OutputExceeded,
         }
     };
     let status = match completion {
         Completion::Exited(status) => status?,
-        Completion::TimedOut => {
-            let _ = child.start_kill();
-            let _ = tokio::time::timeout(Duration::from_secs(1), child.wait()).await;
-            writer.abort();
-            stdout_reader.abort();
-            let stderr = match tokio::time::timeout(Duration::from_secs(1), stderr_reader).await {
-                Ok(Ok(Ok((stderr, _)))) => stderr,
-                _ => Vec::new(),
-            };
-            let (phase, _, _) = playwright_progress(&stderr);
-            return Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                format!(
-                    "Playwright {phase} exceeded the {}-second limit (elapsed {} ms, target {})",
-                    PLAYWRIGHT_EXECUTION_TIMEOUT.as_secs(),
-                    started.elapsed().as_millis(),
-                    target_id,
-                ),
-            )
-            .into());
-        }
         Completion::OutputExceeded => {
             let _ = child.start_kill();
             let _ = tokio::time::timeout(Duration::from_secs(1), child.wait()).await;
@@ -6829,7 +7279,6 @@ async fn run_playwright_program(
     let write_result = writer.await.map_err(io::Error::other)?;
     let stdout = stdout_reader.await.map_err(io::Error::other)??.0;
     let stderr = stderr_reader.await.map_err(io::Error::other)??.0;
-    let (_, _, stderr) = playwright_progress(&stderr);
     let result = parse_playwright_output(status, &stdout, &stderr).map_err(|error| {
         io::Error::new(
             error.kind(),
@@ -6841,41 +7290,6 @@ async fn run_playwright_program(
         eprint!("{}", String::from_utf8_lossy(&stderr));
     }
     Ok(result)
-}
-
-fn playwright_progress(stderr: &[u8]) -> (&'static str, u64, Vec<u8>) {
-    const PREFIX: &str = "DBGJS_PLAYWRIGHT_PROGRESS:";
-    let mut phase = "starting";
-    let mut elapsed_ms = 0;
-    let mut output = Vec::with_capacity(stderr.len());
-    for line in stderr.split_inclusive(|byte| *byte == b'\n') {
-        let text = std::str::from_utf8(line).unwrap_or("");
-        let progress = text
-            .strip_prefix(PREFIX)
-            .and_then(|value| serde_json::from_str::<serde_json::Value>(value.trim_end()).ok());
-        if let Some(progress) = progress {
-            if let (Some(next), Some(elapsed)) =
-                (progress["phase"].as_str(), progress["elapsedMs"].as_u64())
-            {
-                if matches!(
-                    next,
-                    "starting" | "connecting" | "initializing" | "executing" | "closing"
-                ) {
-                    phase = match next {
-                        "starting" => "starting",
-                        "connecting" => "connecting",
-                        "initializing" => "initializing",
-                        "executing" => "executing",
-                        _ => "closing",
-                    };
-                    elapsed_ms = elapsed;
-                    continue;
-                }
-            }
-        }
-        output.extend_from_slice(line);
-    }
-    (phase, elapsed_ms, output)
 }
 
 fn parse_playwright_output(
@@ -7042,18 +7456,28 @@ fn rpc<T, E: std::fmt::Display>(result: Result<T, E>) -> Result<T, io::Error> {
 }
 
 fn usage() -> &'static str {
-    "usage: dbgjs [--json] <command>
+    "usage: dbgjs [--json] [--service-endpoint <uri|local>] [--service-id <id>] [--context <id>] <command>
+
+  --service-endpoint/--service-id select a debugger service behind a LinkRPC endpoint
+  (e.g. a hub via `cmd-stdio:?argv=linkrpc&argv=hub&argv=proxy&argv=--stdio&argv=--sign-as`) instead of
+  the local daemon. Contexts created or set with them remember their service, so later commands
+  that select such a context (by --context, a cwd binding, or its path) use it without the options;
+  DBGJS_SERVICE_ENDPOINT/DBGJS_SERVICE_ID override this. Commands that accept --context (and
+  --connection/--target) also accept it before the command name. `process list --context <id>`
+  lists the processes of the machine running that context's service.
 
 commands:
   dbgjs --version | -V | version
     reports the binary's build version, source commit, and tracked-worktree dirty status; supports --json
   dbgjs daemon view [--context <id> | --all-contexts]
   dbgjs service list|start|status|stop
-  dbgjs process list --root <vscode|node|electron|browser> [--full] [--no-cmd-line] [--stats] [--filter <tree-path>] [--no-trim]
-  dbgjs process list --vscode [--full] [--no-cmd-line] [--stats] [--filter <tree-path>] [--no-trim]
+  dbgjs process list --root <vscode|node|electron|browser> [--context <id>] [--full] [--no-cmd-line] [--stats] [--filter <tree-path>] [--no-trim]
+  dbgjs process list --vscode [--context <id>] [--full] [--no-cmd-line] [--stats] [--filter <tree-path>] [--no-trim]
   dbgjs process attach <process-reference> [--context <id>] [--set] [--force]
   dbgjs context list
-  dbgjs context create <path|:id> [display-name] [--set]
+  dbgjs context create <path|:id> [display-name] [--set] [--idle-timeout <duration|inf>]
+  dbgjs context configure [--context <path|:id>] --idle-timeout <duration|inf>
+  dbgjs connection configure --connection <id> [--context <path|:id>] --idle-timeout <duration|inf|inherit>
   dbgjs context show [--context <path|:id>]
   dbgjs context delete [--context <path|:id>] [--expected-revision <revision>] [--request-id <id>]
   dbgjs context relay --stdio [--context <id>]
@@ -7100,14 +7524,21 @@ commands:
   dbgjs target wait running [target scope]
   dbgjs target resume [--epoch <epoch>] [target scope]
   dbgjs target step into|over|out [--epoch <epoch>] [target scope]
-  dbgjs target eval <expression|-> [--full | --max-preview-length <n>] [target scope]
-    '-' reads the expression from stdin; --full preserves complete strings, not recursive object serialization
+  dbgjs target eval <expression|-> [--await] [--timeout <duration>] [--retain] [value output options] [target scope]
+    '-' reads stdin; top-level await preserves explicit JavaScript awaits; timeouts return reusable continuations
+  dbgjs value show|children|await|release <reference> [--timeout <duration>] [value output options] [target scope]
+    await observes the same promise/evaluation, never reruns it; release does not cancel target JavaScript
+    output options: --json (best effort), --json-expect (exact export), --describe (structured debugger description)
+    limits: --max-depth <0..64>, --max-properties <n>, --max-nodes <n>, --max-string-length <n>, --max-output-bytes <n>
+    --max-preview-length is a string-limit alias; --full removes that limit, not the other inspection/output limits
+    --start <index> selects a page of root children; pages of live objects are not atomic snapshots
   dbgjs playwright <program|-> [target scope]
     exposes the selected target as `page`; use return for results; console logs go to stderr
     '-' reads the program from stdin
   dbgjs target watch <expression> [target scope]
   dbgjs target cdp <method> [--params <json>] [--session-id <id>] [--no-validation] [target scope]
   dbgjs target relay --stdio [target scope]
+  dbgjs target record --output <path|-> [--format mkv|webm|mp4|apng] [--duration-ms <ms>] [--ffmpeg <executable>] [--ffmpeg-args <json-array>] [target scope]
   dbgjs value <expression> [--allow-side-effects] [--max-preview-length <count>] [--max-properties <count>] [target scope]
   dbgjs value --object-id <remote-object-id> [--max-preview-length <count>] [--max-properties <count>] [target scope]
   dbgjs target logpoint <id> <source> <line> <column> <expression> [--require-installed [--timeout-ms <ms>]] [target scope]
@@ -7172,9 +7603,12 @@ mod tests {
     use super::{
         AttachOptions, CliSelection, ConnectionKindFilter, ConnectionStatusFilter,
         DEFAULT_HEAP_SHOW_REFERENCE_LIMIT, DEFAULT_HEAP_STRING_LENGTH,
-        DEFAULT_VALUE_PROPERTY_LIMIT, ProcessAttachLocator, ResolvedScope, ScopeOptions,
-        SelectionStore, TargetListOptions, activate_selection_scope, apply_scope_selection,
-        connection_list_output, extract_scope_options, load_selection_store, parse_attach_options,
+        DEFAULT_VALUE_PROPERTY_LIMIT, ProcessAttachLocator, RemoteServiceEndpoint, ResolvedScope,
+        ScopeOptions, SelectionStore, ServiceOptions, ServiceTarget, TargetListOptions,
+        activate_selection_scope, apply_scope_selection, command_requires_context,
+        connection_list_output,
+        extract_scope_options, extract_service_options, load_selection_store,
+        parse_attach_options,
         parse_chrome_options, parse_connection_list_options, parse_context_create_options,
         parse_context_option, parse_coverage_capture_options, parse_coverage_show_options,
         parse_cpu_profile_sampling_interval, parse_cpu_profile_start_options, parse_eval_options,
@@ -7186,14 +7620,15 @@ mod tests {
         parse_source_grep_cli_options,
         parse_source_map_arguments, parse_source_show_options, parse_source_tree_options,
         parse_source_view, parse_stdio_options, parse_target_list_options, parse_value_options,
-        png_dimensions, read_eval_expression, read_playwright_program, resolve_target_scope,
-        select_implicit_context, split_heap_reference_cli, target_list_output,
+        png_dimensions, read_eval_expression, read_playwright_program, resolve_service_target,
+        resolve_target_scope, cli_side_context, select_implicit_context, split_heap_reference_cli,
+        target_list_output,
     };
     use super::{
         ProcessAttachTarget, RendererAttachSelector, process_attach_destination,
         select_renderer_target, wait_for_renderer_target_id,
     };
-    use dbgjs::service::context_identity::ContextKind;
+    use dbgjs::api::service_api::ContextKind;
     use dbgjs::api::service_api::{
         CdpStdioTopology, ConnectionConfiguration, ConnectionSnapshot, ConnectionStatus,
         ContextSnapshot, ContextSummary, HeapEdgePolicy, HeapPathCost, HeapPathDirection,
@@ -7491,20 +7926,17 @@ mod tests {
         )
         .unwrap();
         assert_eq!(full.expression, "JSON.stringify(value)");
-        assert_eq!(full.max_preview_length, u32::MAX);
-        assert!(full.full);
+        assert_eq!(full.describe_options.max_string_length, u32::MAX);
         let bounded = parse_eval_options(
             &arguments(&["answer", "--max-preview-length", "2000"]),
             "".as_bytes(),
         )
         .unwrap();
         assert_eq!(bounded.expression, "answer");
-        assert_eq!(bounded.max_preview_length, 2000);
-        assert!(!bounded.full);
+        assert_eq!(bounded.describe_options.max_string_length, 2000);
         let default = parse_eval_options(&arguments(&["-1"]), "".as_bytes()).unwrap();
-        assert_eq!(default.max_preview_length, 120);
+        assert_eq!(default.describe_options.max_string_length, 10000);
         assert_eq!(default.expression, "-1");
-        assert!(!default.full);
         assert_eq!(
             parse_eval_options(&arguments(&["--counter"]), "".as_bytes())
                 .unwrap()
@@ -7805,6 +8237,34 @@ mod tests {
                 root_pid: 100,
                 window_id: 7,
             }
+        );
+    }
+
+    #[test]
+    fn process_list_accepts_an_optional_context_after_or_before_the_command() {
+        for mut args in [
+            arguments(&["process", "list", "--vscode", "--context", ":mac"]),
+            arguments(&["--context", ":mac", "process", "list", "--vscode"]),
+        ] {
+            let scope = extract_scope_options(&mut args).unwrap();
+            assert_eq!(
+                (scope.context.as_deref(), args.as_slice()),
+                (Some(":mac"), arguments(&["process", "list", "--vscode"]).as_slice())
+            );
+            assert!(!command_requires_context(&args));
+        }
+        let mut attach = arguments(&["--context", ":mac", "process", "attach", "p:1"]);
+        assert_eq!(
+            extract_scope_options(&mut attach).unwrap().context.as_deref(),
+            Some(":mac")
+        );
+        assert_eq!(attach, arguments(&["process", "attach", "p:1"]));
+        assert!(command_requires_context(&attach));
+        assert_eq!(
+            extract_scope_options(&mut arguments(&["--target", "t", "process", "list"]))
+                .unwrap_err()
+                .to_string(),
+            "--target is not accepted by this command"
         );
     }
 
@@ -8201,6 +8661,7 @@ mod tests {
 
     fn context_snapshot(connections: &[(&str, &[&str])]) -> ContextSnapshot {
         ContextSnapshot {
+            idle_timeout: Default::default(),
             agent_instance_id: "agent".to_owned(),
             id: "ctx".to_owned(),
             display_name: "Context".to_owned(),
@@ -8209,6 +8670,8 @@ mod tests {
             connections: connections
                 .iter()
                 .map(|(connection_id, target_ids)| ConnectionSnapshot {
+            idle_timeout: None,
+            effective_idle_timeout: Default::default(),
                     id: (*connection_id).to_owned(),
                     configuration: ConnectionConfiguration::DirectCdp {
                         endpoint: String::new(),
@@ -8554,18 +9017,6 @@ mod tests {
     }
 
     #[test]
-    fn playwright_progress_does_not_pollute_program_console_or_disclose_values() {
-        let (phase, elapsed, console) = super::playwright_progress(
-            b"DBGJS_PLAYWRIGHT_PROGRESS:{\"phase\":\"initializing\",\"elapsedMs\":12}\n\
-              user output\n\
-              DBGJS_PLAYWRIGHT_PROGRESS:{\"phase\":\"executing\",\"elapsedMs\":20}\n",
-        );
-        assert_eq!(phase, "executing");
-        assert_eq!(elapsed, 20);
-        assert_eq!(console, b"user output\n");
-    }
-
-    #[test]
     fn playwright_cleanup_preserves_the_program_failure() {
         let failure = super::playwright_result_with_cleanup::<()>(
             Err(std::io::Error::other("program failed").into()),
@@ -8830,6 +9281,111 @@ mod tests {
             .to_string();
         assert!(error.contains("stale context binding at '/work/shop/packages'"));
         assert!(error.contains("missing context 'missing'"));
+    }
+
+    #[test]
+    fn service_options_are_extracted_before_the_command_delimiter() {
+        let mut args = arguments(&[
+            "--service-endpoint",
+            "cmd-stdio:?argv=proxy",
+            "context",
+            "list",
+            "--service-id",
+            "hub/dbgjs",
+            "--",
+            "--service-id",
+        ]);
+        assert_eq!(
+            extract_service_options(&mut args).unwrap(),
+            ServiceOptions {
+                endpoint: Some("cmd-stdio:?argv=proxy".into()),
+                service_id: Some("hub/dbgjs".into()),
+            }
+        );
+        assert_eq!(args, arguments(&["context", "list", "--", "--service-id"]));
+
+        let error = extract_service_options(&mut arguments(&["--service-id", "a", "--service-id", "b"]))
+            .unwrap_err();
+        assert_eq!(error.to_string(), "--service-id may only be specified once");
+    }
+
+    #[test]
+    fn service_target_prefers_options_then_env_then_the_context_service() {
+        let local = std::path::PathBuf::from("/state/service.json");
+        let remote = |endpoint: &str, service_id: Option<&str>| {
+            ServiceTarget::Remote(RemoteServiceEndpoint {
+                endpoint: endpoint.into(),
+                service_id: service_id.map(str::to_owned),
+            })
+        };
+        let options = |endpoint: Option<&str>, service_id: Option<&str>| ServiceOptions {
+            endpoint: endpoint.map(str::to_owned),
+            service_id: service_id.map(str::to_owned),
+        };
+        let mut store = SelectionStore::default();
+        store.context_services.insert(
+            "pc2".into(),
+            RemoteServiceEndpoint {
+                endpoint: "hub".into(),
+                service_id: Some("hediet/pc2/dbgjs".into()),
+            },
+        );
+        let resolve = |explicit: &ServiceOptions, env: &ServiceOptions, context: Option<&str>| {
+            resolve_service_target(explicit, env, local.clone(), &store, context)
+        };
+        let none = ServiceOptions::default();
+        let env = options(Some("env"), Some("hub/env"));
+
+        assert_eq!(
+            resolve(&options(Some("flag"), None), &env, Some("pc2")).unwrap(),
+            remote("flag", None)
+        );
+        assert_eq!(resolve(&none, &env, Some("pc2")).unwrap(), remote("env", Some("hub/env")));
+        assert_eq!(
+            resolve(&none, &none, Some("pc2")).unwrap(),
+            remote("hub", Some("hediet/pc2/dbgjs"))
+        );
+        assert_eq!(
+            resolve(&options(None, Some("hub/other")), &none, Some("pc2")).unwrap(),
+            remote("hub", Some("hub/other"))
+        );
+        assert_eq!(
+            resolve(&options(Some("local"), None), &env, Some("pc2")).unwrap(),
+            ServiceTarget::Local { state_file: local.clone() }
+        );
+        assert_eq!(
+            resolve(&none, &none, Some("local-context")).unwrap(),
+            ServiceTarget::Local { state_file: local.clone() }
+        );
+        assert!(resolve(&options(None, Some("hub/x")), &none, None).is_err());
+    }
+
+    #[test]
+    fn cli_side_context_prefers_explicit_then_binding_then_mapped_path_context() {
+        let mut store = SelectionStore::default();
+        store.context_services.insert(
+            "/work/shop".into(),
+            RemoteServiceEndpoint {
+                endpoint: "hub".into(),
+                service_id: None,
+            },
+        );
+        assert_eq!(
+            cli_side_context(&store, "/work/shop/ui", Some("explicit")).as_deref(),
+            Some("explicit")
+        );
+        assert_eq!(
+            cli_side_context(&store, "/work/shop/ui", None).as_deref(),
+            Some("/work/shop")
+        );
+        store
+            .cwd_bindings
+            .insert("/work/shop/ui".into(), "pc2".into());
+        assert_eq!(
+            cli_side_context(&store, "/work/shop/ui", None).as_deref(),
+            Some("pc2")
+        );
+        assert_eq!(cli_side_context(&store, "/elsewhere", None), None);
     }
 
     #[test]

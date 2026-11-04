@@ -8,6 +8,7 @@ impl RelayApi for DebuggerService {
         target_ref: TargetRef,
         expected_generation: u64,
     ) -> Result<PlaywrightProxyEndpoint, JsonRpcError> {
+        let _activity = self.connection_activity(&target_ref.connection).await;
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -203,7 +204,8 @@ impl RelayApi for DebuggerService {
         _ctx: &CallCtx,
         context_id: String,
     ) -> Result<RelayEndpoint, JsonRpcError> {
-        let relay_lifecycle_guard = self.relay_lifecycle_lock.lock().await;
+        let _activity = self.context_activity(&context_id).await;
+        let relay_lifecycle_guard = self.relay_lifecycle_lock.write().await;
         {
             let state = self.state.lock().await;
             if !state.contexts.contains_key(&context_id) {
@@ -225,6 +227,7 @@ impl RelayApi for DebuggerService {
         ctx: &CallCtx,
         target_ref: TargetRef,
     ) -> Result<RelayEndpoint, JsonRpcError> {
+        let _activity = self.connection_activity(&target_ref.connection).await;
         let TargetRef {
             connection:
                 ConnectionRef {
@@ -233,7 +236,7 @@ impl RelayApi for DebuggerService {
                 },
             target_id,
         } = target_ref;
-        let relay_lifecycle_guard = self.relay_lifecycle_lock.lock().await;
+        let relay_lifecycle_guard = self.relay_lifecycle_lock.write().await;
         {
             let state = self.state.lock().await;
             if !state.contexts.contains_key(&context_id) {
