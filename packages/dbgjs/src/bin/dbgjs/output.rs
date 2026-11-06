@@ -7,7 +7,8 @@ use dbgjs::api::service_api::{
     CpuProfileSnapshot, EvaluationSnapshot, FrameProjectionSnapshot, HeapAggregateSnapshot,
     HeapCaptureResult, HeapClassSnapshot, HeapClassSnapshotEntry, HeapDiffSnapshot,
     HeapDominatorSnapshot, HeapNodeSelectionSnapshot, HeapNodeSnapshot, HeapPathSnapshot,
-    HeapReferencesSnapshot, HeapSnapshotProgress, HeapSnapshotResult, LogpointRemovalResult,
+    HeapReferencesSnapshot, HeapSimilarStringsSnapshot, HeapSnapshotProgress, HeapSnapshotResult,
+    LogpointRemovalResult,
     ObservationResult,
     PlaywrightChannel, ProcessRole, ProcessRootKind, ProcessSnapshot, ProcessTargetSnapshot,
     ProcessTreeSnapshot, PromiseSelectionSnapshot, PromiseSnapshot, ResourceGraphSnapshot,
@@ -1857,6 +1858,59 @@ impl HumanOutput for HeapDiffSnapshot {
             println!(
                 "... string diff is incomplete: {} older and {} newer reconstructed strings omitted",
                 self.older_incomplete_string_count, self.newer_incomplete_string_count
+            );
+        }
+    }
+}
+
+impl HumanOutput for HeapSimilarStringsSnapshot {
+    fn print_human(&self) {
+        if self.clusters.is_empty() {
+            println!(
+                "No duplicate or similar strings in '{}' ({} candidate strings).",
+                self.capture_id, self.candidate_count
+            );
+        } else {
+            println!(
+                "Similar strings in '{}' ({} candidate strings; largest redundant size first):",
+                self.capture_id, self.candidate_count
+            );
+        }
+        for (index, cluster) in self.clusters.iter().enumerate() {
+            println!(
+                "#{}  {} strings, {} total, ~{} unique, ~{} redundant",
+                index + 1,
+                cluster.string_count,
+                compact_bytes(cluster.total_size),
+                compact_bytes(cluster.unique_size),
+                compact_bytes(cluster.redundant_size),
+            );
+            for variant in &cluster.variants {
+                let more = variant.string_count - variant.references.len() as u64;
+                println!(
+                    "    {:>4}x {:>10}  similarity {:.2}{}  {}{}",
+                    variant.string_count,
+                    compact_bytes(variant.shallow_size),
+                    variant.similarity,
+                    if variant.text_incomplete { " (prefix only)" } else { "" },
+                    variant.references.join(" "),
+                    if more > 0 { format!(" +{more}") } else { String::new() },
+                );
+                println!("          {}", escaped_heap_text(&variant.text, variant.text_truncated));
+            }
+            if cluster.omitted_variant_count > 0 {
+                println!("    ... {} more variants", cluster.omitted_variant_count);
+            }
+        }
+        if self.omitted_cluster_count > 0 {
+            println!("... {} clusters omitted", self.omitted_cluster_count);
+        }
+        if self.incomplete_text_count > 0 {
+            println!(
+                "{} strings are stored only partially (V8 --heap-snapshot-string-limit, default 1024) \
+                 and are grouped only with copies of identical prefix and size (\"prefix only\"). \
+                 Capture with `dbgjs heap capture --full-strings` to find edited copies too.",
+                self.incomplete_text_count
             );
         }
     }

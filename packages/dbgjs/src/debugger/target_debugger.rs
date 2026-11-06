@@ -38,6 +38,7 @@ use crate::capture::heap::heap_graph::{
     PathOptions, TextMatcher, TraversalDirection, parse_heap_graph,
 };
 use crate::capture::heap::heap_snapshot::{HeapConstructorGroup, parse_constructor_groups};
+use crate::capture::heap::heap_similarity::{SimilarStringOptions, StringVariant, find_similar_strings};
 use crate::debugger::promise_debugging::{
     has_live_promise_evidence, inspect_heap_promises, inspect_live_promise, remote_value_snapshot,
 };
@@ -54,7 +55,9 @@ use crate::api::service_api::{
     HeapEdgePolicy, HeapInstanceSnapshot, HeapNodeLocationSnapshot, HeapNodeSelectionSnapshot,
     HeapNodeSelector, HeapNodeSnapshot, HeapPathCost, HeapPathDirection, HeapPathOptions,
     HeapPathSnapshot, HeapPathStepSnapshot, HeapReferenceDirection, HeapReferenceSnapshot,
-    HeapReferencesSnapshot, HeapSnapshotProgress, HeapSnapshotResult, HeapSnapshotTiming,
+    HeapReferencesSnapshot, HeapSimilarStringClusterSnapshot, HeapSimilarStringsOptions,
+    HeapSimilarStringsSnapshot, HeapSnapshotProgress, HeapSnapshotResult, HeapSnapshotTiming,
+    HeapStringVariantSnapshot,
     HeapTraversalDirection, PauseSnapshot, PromiseSelectionSnapshot, PromiseState, ScopeSnapshot,
     ScreenshotSnapshot, SourceContentSnapshot, SourceExcerpt, SourceExcerptLine,
     SourceGraphViewSnapshot, SourceLocation, SourceMappingSnapshot, TargetBreakpointSnapshot,
@@ -876,6 +879,25 @@ impl TargetDebuggerHandle {
         receiver.await.map_err(|_| TargetDebuggerError::Stopped)?
     }
 
+    pub async fn find_similar_heap_strings(
+        &self,
+        capture_id: String,
+        options: HeapSimilarStringsOptions,
+        max_string_length: Option<u32>,
+    ) -> Result<HeapSimilarStringsSnapshot, TargetDebuggerError> {
+        let (response, receiver) = oneshot::channel();
+        self.commands
+            .send(TargetCommand::FindSimilarHeapStrings {
+                capture_id,
+                options,
+                max_string_length,
+                response,
+            })
+            .await
+            .map_err(|_| TargetDebuggerError::Stopped)?;
+        receiver.await.map_err(|_| TargetDebuggerError::Stopped)?
+    }
+
     pub fn heap_snapshot_progress(&self) -> Option<HeapSnapshotProgress> {
         self.heap_snapshot_progress
             .borrow()
@@ -1319,6 +1341,12 @@ enum TargetCommand {
         limit: u32,
         max_string_length: Option<u32>,
         response: oneshot::Sender<Result<HeapDiffSnapshot, TargetDebuggerError>>,
+    },
+    FindSimilarHeapStrings {
+        capture_id: String,
+        options: HeapSimilarStringsOptions,
+        max_string_length: Option<u32>,
+        response: oneshot::Sender<Result<HeapSimilarStringsSnapshot, TargetDebuggerError>>,
     },
     StartCoverage {
         response: oneshot::Sender<Result<(), TargetDebuggerError>>,
@@ -2536,6 +2564,21 @@ async fn run_target(
                 .await;
                 let _ = response.send(result);
             }
+            Next::Command(Some(TargetCommand::FindSimilarHeapStrings {
+                capture_id,
+                options,
+                max_string_length,
+                response,
+            })) => {
+                let result = async {
+                    let (graph, _, _) =
+                        load_heap_graph(&capture_id, &heap_captures, &mut heap_graphs).await?;
+                    live_heap_graph_view(&graph, &capture_id, &heap_captures,
+                        Duration::ZERO, false).similar_strings(options, max_string_length)
+                }
+                .await;
+                let _ = response.send(result);
+            }
             Next::Command(None) => break,
             Next::Event(Ok(changed)) => {
                 owned_values.invalidate(&driver).await;
@@ -2722,6 +2765,12 @@ impl StoredHeapGraph {
         max_string_length: Option<u32>,
     ) -> Result<HeapDiffSnapshot, TargetDebuggerError> {
         self.view().diff(&newer.view(), by, limit, max_string_length)
+    }
+
+    pub(crate) fn similar_strings(&self, options: HeapSimilarStringsOptions,
+        max_string_length: Option<u32>,
+    ) -> Result<HeapSimilarStringsSnapshot, TargetDebuggerError> {
+        self.view().similar_strings(options, max_string_length)
     }
 }
 
@@ -2976,6 +3025,57 @@ impl HeapGraphView<'_> {
             newer_capture_id: newer.capture_id.to_owned(), by, entries,
             older_incomplete_string_count: diff.older_incomplete_string_count,
             newer_incomplete_string_count: diff.newer_incomplete_string_count,
+        })
+    }
+
+    fn similar_strings(&self, options: HeapSimilarStringsOptions, max_string_length: Option<u32>,
+    ) -> Result<HeapSimilarStringsSnapshot, TargetDebuggerError> {
+        let analysis = find_similar_strings(self.graph, SimilarStringOptions {
+            min_size: options.min_size,
+            threshold: options.threshold,
+        }).map_err(heap_analysis_error)?;
+        let omitted_cluster_count =
+            analysis.clusters.len().saturating_sub(options.limit as usize) as u64;
+        let clusters = analysis.clusters.iter().take(options.limit as usize).map(|cluster| {
+            let variants = cluster.variants.iter().take(options.max_variants as usize)
+                .map(|variant| self.string_variant(variant, options.max_references, max_string_length))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(HeapSimilarStringClusterSnapshot {
+                string_count: cluster.string_count(),
+                total_size: cluster.total_size,
+                unique_size: cluster.unique_size,
+                redundant_size: cluster.redundant_size(),
+                omitted_variant_count: (cluster.variants.len() - variants.len()) as u64,
+                variants,
+            })
+        }).collect::<Result<Vec<_>, TargetDebuggerError>>()?;
+        Ok(HeapSimilarStringsSnapshot {
+            capture_id: self.capture_id.to_owned(),
+            candidate_count: analysis.candidate_count,
+            incomplete_text_count: analysis.incomplete_text_count,
+            clusters,
+            omitted_cluster_count,
+        })
+    }
+
+    fn string_variant(&self, variant: &StringVariant, max_references: u32,
+        max_string_length: Option<u32>,
+    ) -> Result<HeapStringVariantSnapshot, TargetDebuggerError> {
+        let summary = self.graph.node_summary(variant.nodes[0]).map_err(heap_analysis_error)?;
+        let (text, text_truncated) =
+            bounded_heap_text(summary.string_value.unwrap_or_default(), max_string_length);
+        let references = variant.nodes.iter().take(max_references as usize).map(|&node| {
+            let summary = self.graph.node_summary(node).map_err(heap_analysis_error)?;
+            Ok(heap_node_reference(self.capture_id, summary.heap_object_id))
+        }).collect::<Result<Vec<_>, TargetDebuggerError>>()?;
+        Ok(HeapStringVariantSnapshot {
+            string_count: variant.nodes.len() as u64,
+            references,
+            shallow_size: variant.shallow_size,
+            similarity: variant.similarity,
+            text,
+            text_truncated,
+            text_incomplete: variant.text_incomplete,
         })
     }
 }

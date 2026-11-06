@@ -241,6 +241,24 @@ ID; the second is the remote handle returned by that call. This requires the
 original target to remain connected and the object to still be alive; an
 offline snapshot alone cannot execute JavaScript.
 
+### Duplicate and similar strings
+
+`dbgjs heap similar` finds strings that are stored more than once, for example
+a file that is read repeatedly without being interned, including copies that
+differ by small edits. It splits each string into content-defined chunks with a
+rolling hash, so an insertion only changes the chunks around it, then finds
+candidate pairs with MinHash instead of comparing every pair. Groups are sorted
+by redundant bytes, list instance references for `heap refs` and
+`heap retainer-path`, and `--save <directory>` writes each variant's text to a
+file for diffing.
+
+V8 stores at most 1,024 characters of each string in a snapshot by default.
+Such strings are grouped only with copies of identical prefix and size. Capture
+with `dbgjs heap capture --full-strings` to store complete texts; on Node.js
+targets this raises V8's `--heap-snapshot-string-limit` for all later
+snapshots. Chromium-based targets need `--js-flags=--heap-snapshot-string-limit=<n>`
+at launch.
+
 ## Screenshots
 
 Capture the selected page as a PNG.

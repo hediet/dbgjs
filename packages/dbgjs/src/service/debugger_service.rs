@@ -70,6 +70,7 @@ use crate::api::service_api::{
     HeapAggregateBy, HeapAggregateSnapshot, HeapCaptureResult, HeapClassSnapshot, HeapDiffSnapshot,
     HeapDominatorSnapshot, HeapEdgePolicy, HeapNodeSelectionSnapshot, HeapNodeSelector,
     HeapPathOptions, HeapPathSnapshot, HeapReferenceDirection, HeapReferencesSnapshot,
+    HeapSimilarStringsOptions, HeapSimilarStringsSnapshot,
     HeapSnapshotProgress, HeapSnapshotResult, IdleTimeout, LogpointSpec, MutationOptions, ObservationCursor,
     ObservationResult, PlaywrightProxyEndpoint, ProcessTreeSnapshot, PromiseSelectionSnapshot,
     PromiseState, RelayEndpoint, ResourceCapabilitySnapshot, ResourceFrontierSnapshot,
