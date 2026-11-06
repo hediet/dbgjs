@@ -5,7 +5,7 @@ use std::io;
 use std::io::IsTerminal;
 use std::io::Read;
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use atomic_write_file::AtomicWriteFile;
@@ -26,7 +26,8 @@ use dbgjs::api::service_api::{
     BreakpointSpec, CaptureKind, CdpStdioTopology, ConnectionConfiguration, ConnectionStatus,
     ContextSnapshot, ContextSummary, CpuProfileSnapshot, DbgServiceClient, EvaluationSnapshot,
     HeapAggregateBy, HeapEdgePolicy, HeapNodeSelector, HeapPathCost, HeapPathDirection,
-    HeapPathOptions, HeapReferenceDirection, HeapSnapshotProgress, IdleTimeout, LogpointSpec, MutationOptions,
+    HeapPathOptions, HeapReferenceDirection, HeapSimilarStringsOptions, HeapSimilarStringsSnapshot,
+    HeapSnapshotProgress, IdleTimeout, LogpointSpec, MutationOptions,
     ObservationCursor, ObservationResult, PlaywrightChannel, ProcessRole, ProcessRootKind,
     ProcessTreeSnapshot, PromiseState, ResourceGraphSnapshot, SourceDisplayOptions,
     SourceFormattingMode, SourceSearchOptions, SourceTreeKind, SourceViewPreference, StepKind,
@@ -756,6 +757,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             let client = ensure_service(&service_target).await?;
             let scope =
                 resolve_scope(&client, &load_selection(&selection_file)?, &scope_options).await?;
+            if options.full_strings {
+                raise_heap_snapshot_string_limit(&client, &scope).await?;
+            }
             let call = rpc(client
                 .heap
                 .capture_heap_snapshot(
@@ -1148,6 +1152,27 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 )
                 .await)?;
             output.print(&diff)?;
+        }
+        [heap, similar, options @ ..] if heap == "heap" && similar == "similar" => {
+            let options = parse_heap_similar_options(options)?;
+            let client = ensure_service(&service_target).await?;
+            let selection = load_selection(&selection_file)?;
+            let scope = resolve_offline_scope(&client, &selection, &scope_options).await?;
+            let mut snapshot = rpc(client
+                .heap
+                .find_similar_heap_strings(
+                    scope.target_ref(),
+                    options.capture_id,
+                    options.similar,
+                    if options.save_directory.is_some() { None } else { options.max_string_length },
+                )
+                .await)?;
+            if let Some(directory) = options.save_directory.as_deref() {
+                let saved = save_similar_strings(directory, &snapshot)?;
+                eprintln!("Saved {} variant text(s) to {}", saved.len(), directory.display());
+                bound_similar_string_texts(&mut snapshot, options.max_string_length);
+            }
+            output.print(&snapshot)?;
         }
         [heap, snapshot, path, options @ ..] if heap == "heap" && snapshot == "snapshot" => {
             let options = parse_heap_snapshot_options(options)?;
@@ -4085,6 +4110,7 @@ struct HeapCaptureOptions {
     capture_id: Option<String>,
     capture_numeric_value: bool,
     expose_internals: bool,
+    full_strings: bool,
 }
 
 fn parse_source_list_options(values: &[String]) -> Result<Option<String>, io::Error> {
@@ -4504,6 +4530,13 @@ struct HeapDiffOptions {
     max_string_length: Option<u32>,
 }
 
+struct HeapSimilarOptions {
+    capture_id: String,
+    similar: HeapSimilarStringsOptions,
+    max_string_length: Option<u32>,
+    save_directory: Option<PathBuf>,
+}
+
 fn parse_heap_select_options(values: &[String]) -> Result<HeapSelectOptions, io::Error> {
     let mut capture_id = None;
     let mut selector = HeapNodeSelector::default();
@@ -4850,6 +4883,130 @@ fn parse_heap_diff_options(values: &[String]) -> Result<HeapDiffOptions, io::Err
     })
 }
 
+fn parse_heap_similar_options(values: &[String]) -> Result<HeapSimilarOptions, io::Error> {
+    let mut capture_id = None;
+    let mut similar = HeapSimilarStringsOptions {
+        min_size: 1024,
+        threshold: 0.8,
+        limit: 20,
+        max_variants: 5,
+        max_references: 3,
+    };
+    let mut max_string_length = Some(DEFAULT_HEAP_STRING_LENGTH);
+    let mut save_directory = None;
+    let mut index = 0;
+    while index < values.len() {
+        match values[index].as_str() {
+            "--min-size" => {
+                index += 1;
+                similar.min_size = parse_byte_size(values.get(index), "--min-size")?;
+            }
+            "--threshold" => {
+                index += 1;
+                similar.threshold = values
+                    .get(index)
+                    .and_then(|value| value.parse::<f64>().ok())
+                    .filter(|value| (0.0..=1.0).contains(value))
+                    .ok_or_else(|| io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "--threshold requires a number between 0 and 1",
+                    ))?;
+            }
+            "--limit" => {
+                index += 1;
+                similar.limit = parse_u32_option(values, index, "--limit")?;
+            }
+            "--max-variants" => {
+                index += 1;
+                similar.max_variants = parse_u32_option(values, index, "--max-variants")?.max(1);
+            }
+            "--max-references" => {
+                index += 1;
+                similar.max_references = parse_u32_option(values, index, "--max-references")?;
+            }
+            "--full-strings" => max_string_length = None,
+            "--max-string-length" => {
+                index += 1;
+                max_string_length = Some(parse_u32_option(values, index, "--max-string-length")?);
+            }
+            "--save" => {
+                index += 1;
+                save_directory = Some(absolute_path(Path::new(values.get(index).ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidInput, "--save requires a directory")
+                })?))?);
+            }
+            option if option.starts_with("--") => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("unknown heap similar option '{option}'"),
+                ));
+            }
+            value if capture_id.is_none() => capture_id = Some(value.to_owned()),
+            value => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("unexpected heap similar argument '{value}'"),
+                ));
+            }
+        }
+        index += 1;
+    }
+    Ok(HeapSimilarOptions {
+        capture_id: capture_id.unwrap_or_else(|| ".".to_owned()),
+        similar,
+        max_string_length,
+        save_directory,
+    })
+}
+
+/// Parses `4096`, `4KiB`, `1MiB`, `4kb`, or `4k` (binary multiples).
+fn parse_byte_size(value: Option<&String>, flag: &str) -> Result<u64, io::Error> {
+    let invalid = || io::Error::new(
+        io::ErrorKind::InvalidInput,
+        format!("{flag} requires a size such as 4096, 4KiB, or 1MiB"),
+    );
+    let value = value.ok_or_else(invalid)?.to_ascii_lowercase();
+    let digits = value.trim_end_matches(|character: char| character.is_ascii_alphabetic());
+    let scale = match &value[digits.len()..] {
+        "" | "b" => 1,
+        "k" | "kb" | "kib" => 1024,
+        "m" | "mb" | "mib" => 1024 * 1024,
+        _ => return Err(invalid()),
+    };
+    digits.parse::<u64>().ok().and_then(|number| number.checked_mul(scale)).ok_or_else(invalid)
+}
+
+/// Writes every listed variant as `cluster-<n>/variant-<m>.txt`, so copies can
+/// be compared with an ordinary diff tool.
+fn save_similar_strings(
+    directory: &Path,
+    snapshot: &HeapSimilarStringsSnapshot,
+) -> Result<Vec<PathBuf>, io::Error> {
+    let mut written = Vec::new();
+    for (cluster_index, cluster) in snapshot.clusters.iter().enumerate() {
+        let cluster_directory = directory.join(format!("cluster-{}", cluster_index + 1));
+        std::fs::create_dir_all(&cluster_directory)?;
+        for (variant_index, variant) in cluster.variants.iter().enumerate() {
+            let path = cluster_directory.join(format!("variant-{}.txt", variant_index + 1));
+            std::fs::write(&path, &variant.text)?;
+            written.push(path);
+        }
+    }
+    Ok(written)
+}
+
+fn bound_similar_string_texts(snapshot: &mut HeapSimilarStringsSnapshot, max_length: Option<u32>) {
+    let Some(max_length) = max_length else {
+        return;
+    };
+    for variant in snapshot.clusters.iter_mut().flat_map(|cluster| &mut cluster.variants) {
+        if let Some((end, _)) = variant.text.char_indices().nth(max_length as usize) {
+            variant.text.truncate(end);
+            variant.text_truncated = true;
+        }
+    }
+}
+
 fn parse_heap_aggregate_by(value: Option<&String>) -> Result<HeapAggregateBy, io::Error> {
     match value.map(String::as_str) {
         Some("type") => Ok(HeapAggregateBy::NodeType),
@@ -5092,6 +5249,7 @@ fn parse_heap_capture_options(values: &[String]) -> Result<HeapCaptureOptions, i
     let mut capture_id = None;
     let mut capture_numeric_value = false;
     let mut expose_internals = false;
+    let mut full_strings = false;
     let mut index = 0;
     while index < values.len() {
         match values[index].as_str() {
@@ -5108,6 +5266,7 @@ fn parse_heap_capture_options(values: &[String]) -> Result<HeapCaptureOptions, i
             }
             "--capture-numeric-value" => capture_numeric_value = true,
             "--expose-internals" => expose_internals = true,
+            "--full-strings" => full_strings = true,
             option => {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
@@ -5121,7 +5280,45 @@ fn parse_heap_capture_options(values: &[String]) -> Result<HeapCaptureOptions, i
         capture_id,
         capture_numeric_value,
         expose_internals,
+        full_strings,
     })
+}
+
+/// V8 stores only the first `--heap-snapshot-string-limit` characters (1024
+/// by default) of each string in a snapshot. Node exposes V8 flags at runtime;
+/// the change applies to all later snapshots of the target.
+async fn raise_heap_snapshot_string_limit(
+    client: &DbgServiceClient,
+    scope: &ResolvedScope,
+) -> Result<(), Box<dyn std::error::Error>> {
+    const EXPRESSION: &str = "(() => { \
+        const process = globalThis.process; \
+        const v8 = process?.getBuiltinModule?.('v8') ?? process?.mainModule?.require?.('v8'); \
+        if (!v8?.setFlagsFromString) return false; \
+        v8.setFlagsFromString('--heap-snapshot-string-limit=2147483647'); \
+        return true; })()";
+    let value = rpc(client
+        .targets
+        .value_operation(
+            scope.target_ref(),
+            ValueOperation::Evaluate {
+                expression: EXPRESSION.to_owned(),
+                retain: false,
+                await_result: false,
+            },
+            DescribeOptions::default(),
+            2000,
+        )
+        .await)?;
+    if value.value != Some(serde_json::Value::Bool(true)) {
+        return Err(io::Error::other(format!(
+            "--full-strings needs a Node.js target with the v8 module (got {}); for Chromium-based \
+             targets, launch with --js-flags=--heap-snapshot-string-limit=<characters>",
+            value.display()
+        ))
+        .into());
+    }
+    Ok(())
 }
 
 fn parse_heap_class_options(values: &[String]) -> Result<HeapClassOptions, io::Error> {
@@ -7537,7 +7734,8 @@ commands:
   dbgjs profile stop [--id <name>] [target scope]
   dbgjs profile show [<name>] [--view <functions|files>] [--sort <self|total>] [--path <source-prefix>] [--max-lines <count>] [--context <id>]
   dbgjs profile export [<name>] --output <path> [--context <id>]
-  dbgjs heap capture [--id <name>] [--capture-numeric-value] [--expose-internals] [target scope]
+  dbgjs heap capture [--id <name>] [--capture-numeric-value] [--expose-internals] [--full-strings] [target scope]
+    --full-strings first raises V8's --heap-snapshot-string-limit (Node.js targets) so strings are stored in full
   dbgjs capture list [--context <id>]
   dbgjs capture show <name> [--context <id>]
     renders the kind's default bounded view: coverage tree, CPU profile, or heap classes
@@ -7554,6 +7752,10 @@ commands:
   dbgjs heap root-path|retainer-path|dominators <capture#heap-object-id>
   dbgjs heap aggregate [<capture>] [--by <type|name|string>] [--limit <count>] [--full-strings]
   dbgjs heap diff <older-capture> <newer-capture> [--by <type|name|string>] [--limit <count>] [--full-strings]
+  dbgjs heap similar [<capture>] [--min-size <bytes>] [--threshold <0..1>] [--limit <clusters>] [--max-variants <count>] [--max-references <count>] [--full-strings] [--save <directory>]
+    groups identical and near-identical strings (content-defined chunks, MinHash); sorted by redundant bytes
+    --save writes each variant's full stored text to <directory>/cluster-N/variant-M.txt
+    V8 stores at most 1024 characters per string; capture with --full-strings to compare complete texts
   dbgjs heap snapshot <path> [--capture-numeric-value] [--expose-internals] [target scope]
 
 target scope:

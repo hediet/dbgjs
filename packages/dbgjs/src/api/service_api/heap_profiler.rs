@@ -81,6 +81,13 @@ pub trait HeapProfilerApi {
         max_string_length: Option<u32>,
     ) -> Result<HeapDiffSnapshot, HeapProfilerError>;
 
+    async fn find_similar_heap_strings(
+        target_ref: TargetRef,
+        capture_id: String,
+        options: HeapSimilarStringsOptions,
+        max_string_length: Option<u32>,
+    ) -> Result<HeapSimilarStringsSnapshot, HeapProfilerError>;
+
     async fn get_heap_snapshot_progress(
         target_ref: TargetRef,
     ) -> Result<Option<HeapSnapshotProgress>, HeapProfilerError>;

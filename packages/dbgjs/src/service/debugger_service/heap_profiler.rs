@@ -568,6 +568,34 @@ impl HeapProfilerApi for DebuggerService {
             .map_err(HeapProfilerError::from)
     }
 
+    async fn find_similar_heap_strings(
+        &self,
+        _ctx: &CallCtx,
+        target_ref: TargetRef,
+        capture_id: String,
+        options: HeapSimilarStringsOptions,
+        max_string_length: Option<u32>,
+    ) -> Result<HeapSimilarStringsSnapshot, HeapProfilerError> {
+        if let Some(result) = self.with_stored_heap_graph(&target_ref, &capture_id, false,
+            move |graph| graph.similar_strings(options, max_string_length)).await? {
+            return Ok(result);
+        }
+        let _activity = self.connection_activity(&target_ref.connection).await;
+        let TargetRef {
+            connection:
+                ConnectionRef {
+                    context_id,
+                    connection_id,
+                },
+            target_id,
+        } = target_ref;
+        self.target_debugger(&context_id, &connection_id, &target_id)
+            .await?
+            .find_similar_heap_strings(capture_id, options, max_string_length)
+            .await
+            .map_err(HeapProfilerError::from)
+    }
+
     async fn get_heap_snapshot_progress(
         &self,
         _ctx: &CallCtx,

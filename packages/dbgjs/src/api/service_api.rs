@@ -1961,6 +1961,59 @@ pub struct HeapDiffSnapshot {
     pub newer_incomplete_string_count: u64,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct HeapSimilarStringsOptions {
+    /// Strings with a smaller shallow size are ignored.
+    pub min_size: u64,
+    /// Minimum byte-weighted similarity of two strings' content, in `0..=1`.
+    pub threshold: f64,
+    pub limit: u32,
+    pub max_variants: u32,
+    pub max_references: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct HeapSimilarStringsSnapshot {
+    pub capture_id: String,
+    pub candidate_count: u64,
+    /// Candidates whose text the snapshot stores only partially (V8's
+    /// `--heap-snapshot-string-limit`); they are grouped only with copies of
+    /// identical stored prefix and size.
+    pub incomplete_text_count: u64,
+    /// Largest redundant size first.
+    pub clusters: Vec<HeapSimilarStringClusterSnapshot>,
+    pub omitted_cluster_count: u64,
+}
+
+/// Identical or similar strings. The first variant is the representative.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct HeapSimilarStringClusterSnapshot {
+    pub string_count: u64,
+    pub total_size: u64,
+    /// Estimated size if every chunk of text were stored once.
+    pub unique_size: u64,
+    pub redundant_size: u64,
+    pub variants: Vec<HeapStringVariantSnapshot>,
+    pub omitted_variant_count: u64,
+}
+
+/// Strings with identical stored text and shallow size.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct HeapStringVariantSnapshot {
+    pub string_count: u64,
+    pub references: Vec<String>,
+    pub shallow_size: u64,
+    /// Similarity to the cluster's representative, in `0..=1`.
+    pub similarity: f64,
+    pub text: String,
+    pub text_truncated: bool,
+    pub text_incomplete: bool,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum StepKind {
