@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import test from "node:test";
@@ -13,11 +13,12 @@ import {
 	observationSnapshot,
 } from "../apiTypes.js";
 import { DaemonClient, defaultServiceStateFile, parseEndpointFile } from "../daemonClient.js";
-import { resolveDaemonExecutable } from "../daemonProcess.js";
+import { ensureDaemonProcess, listDaemonServices, resolveDaemonExecutable } from "../daemonProcess.js";
 import { connectDaemon } from "../daemonTransport.js";
 import { DbgServiceClient } from "../dbgServiceClient.js";
 import {
 	CaptureApi, ContextApi, CoverageApi, CpuProfilerApi, HeapProfilerApi, TargetDebuggerApi,
+	serviceContractFingerprint,
 } from "../generated/interfaces.js";
 import { unwrapRpcResult } from "../rpcResult.js";
 import { findInstalledChrome, parseLaunch, resolveLaunch } from "../launchConfig.js";
@@ -35,13 +36,13 @@ test("daemon state uses the dbgjs namespace on every platform", () => {
 		LOCALAPPDATA: "local",
 	}), "custom-service.json");
 	assert.equal(defaultServiceStateFile({ LOCALAPPDATA: "local" }),
-		join("local", "dbgjs", "service.json"));
+		join("local", "dbgjs", "services", serviceContractFingerprint, "service.json"));
 	assert.equal(defaultServiceStateFile({ XDG_RUNTIME_DIR: "runtime" }),
-		join("runtime", "dbgjs", "service.json"));
+		join("runtime", "dbgjs", "services", serviceContractFingerprint, "service.json"));
 	assert.equal(defaultServiceStateFile({ HOME: "home" }),
-		join("home", ".cache", "dbgjs", "service.json"));
+		join("home", ".cache", "dbgjs", "services", serviceContractFingerprint, "service.json"));
 	assert.equal(defaultServiceStateFile({}),
-		join(tmpdir(), `dbgjs-${process.pid}`, "service.json"));
+		join(tmpdir(), `dbgjs-${process.pid}`, "services", serviceContractFingerprint, "service.json"));
 });
 
 test("workspace context identity uses lexical lowercase absolute paths", () => {
@@ -280,6 +281,41 @@ test("daemon endpoint parsing accepts the Rust named-pipe shape", () => {
 	);
 });
 
+test("extension service commands guard automatic startup but allow explicit parallel startup", {
+	skip: process.platform === "win32",
+}, async () => {
+	const directory = await mkdtemp(join(process.cwd(), ".dbgjs-startup-policy-"));
+	const executable = join(directory, "dbgjs-service");
+	const argsFile = join(directory, "args.txt");
+	const options = {
+		extensionPath: directory,
+		configuredExecutable: executable,
+		stateFile: join(directory, "custom.json"),
+		environment: { XDG_RUNTIME_DIR: directory },
+	};
+	try {
+		await writeFile(executable, `#!/bin/sh\nprintf '%s\\n' "$@" > '${argsFile.replaceAll("'", "'\\''")}'\nprintf '[]\\n'\n`);
+		await chmod(executable, 0o700);
+		const common = [
+			"--state-file", options.stateFile, "--expected-contract", serviceContractFingerprint,
+			"--registry-directory", join(directory, "dbgjs"),
+		];
+		await ensureDaemonProcess(options);
+		assert.deepEqual((await readFile(argsFile, "utf8")).trimEnd().split("\n"),
+			["--ensure", "--refuse-incompatible", ...common]);
+		await ensureDaemonProcess(options, true);
+		assert.deepEqual((await readFile(argsFile, "utf8")).trimEnd().split("\n"),
+			["--ensure", ...common]);
+		assert.equal(await listDaemonServices(options), "[]\n");
+		assert.deepEqual((await readFile(argsFile, "utf8")).trimEnd().split("\n"),
+			["--list", ...common]);
+		await writeFile(executable, "#!/bin/sh\nprintf 'Incompatible dbgjs service running\\n' >&2\nexit 1\n");
+		await assert.rejects(ensureDaemonProcess(options), /Incompatible dbgjs service running/);
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
 test("debug service facets route through one authenticated connection", async () => {
 	const directory = await mkdtemp(join(tmpdir(), "dbgjs-facets-"));
 	const endpoint = testEndpoint(directory);
@@ -326,6 +362,7 @@ test("debug service facets route through one authenticated connection", async ()
 		const cpu = { ...coverage, project: false };
 		const cdp = { ...scope, method: "Runtime.enable", params: {}, validate: true };
 		const cases = [
+			["dev.dbgjs.discovery.v1::describe", {}, () => client.discovery.describe({})],
 			["dev.dbgjs.cdp-debugger::service_info", {}, () => client.service.service_info({})],
 			["dev.dbgjs.context::list_contexts", { cwd: null }, () => client.contexts.list_contexts({ cwd: null })],
 			["dev.dbgjs.source::list_sources", { contextId: scope.targetRef.connection.contextId, path: null },
@@ -350,6 +387,55 @@ test("debug service facets route through one authenticated connection", async ()
 		assert.equal(preambles, 1);
 	} finally {
 		daemon.close();
+		await closeServer(server, sockets);
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
+test("extension contract validation rejects a different running service", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "dbgjs-contract-probe-"));
+	const endpoint = testEndpoint(directory);
+	const stateFile = join(directory, "service.json");
+	const sockets = new Set<Socket>();
+	let fingerprint = serviceContractFingerprint;
+	const server = createServer(socket => {
+		sockets.add(socket);
+		socket.setEncoding("utf8");
+		let buffer = "";
+		socket.on("data", (chunk: string) => {
+			buffer += chunk;
+			for (;;) {
+				const newline = buffer.indexOf("\n");
+				if (newline < 0) return;
+				const message = JSON.parse(buffer.slice(0, newline));
+				buffer = buffer.slice(newline + 1);
+				if ("hello" in message) continue;
+				assert.equal(message.method, "dev.dbgjs.discovery.v1::describe");
+				socket.write(`${JSON.stringify({
+					jsonrpc: "2.0",
+					id: message.id,
+					result: {
+						processId: 1234, version: "test", gitCommit: "test-commit",
+						contractFingerprint: fingerprint, interfaces: [],
+					},
+				})}\n`);
+			}
+		});
+	});
+	await listen(server, endpoint);
+	await writeFile(stateFile, JSON.stringify({
+		transport: process.platform === "win32"
+			? { kind: "namedPipe", pipeName: endpoint }
+			: { kind: "unixSocket", path: endpoint },
+		token: "test-token",
+	}));
+	const client = await DaemonClient.connect(stateFile);
+	try {
+		await client.validateContract();
+		fingerprint = "different-contract";
+		await assert.rejects(client.validateContract(), /Incompatible dbgjs service running \(PID 1234/);
+	} finally {
+		client.close();
 		await closeServer(server, sockets);
 		await rm(directory, { recursive: true, force: true });
 	}

@@ -6,6 +6,7 @@ import {
 	ContextApi, ContextApiRoot,
 	CoverageApi, CoverageApiRoot,
 	CpuProfilerApi, CpuProfilerApiRoot,
+	DiscoveryApi, DiscoveryApiRoot,
 	HeapProfilerApi, HeapProfilerApiRoot,
 	RelayApi, RelayApiRoot,
 	ScreencastApi, ScreencastApiRoot,
@@ -20,6 +21,7 @@ import {
  */
 export class DbgServiceClient {
 	public readonly service: InterfaceClient<typeof ServiceApi>;
+	public readonly discovery: InterfaceClient<typeof DiscoveryApi>;
 	public readonly contexts: InterfaceClient<typeof ContextApi>;
 	public readonly sources: InterfaceClient<typeof SourceApi>;
 	public readonly captures: InterfaceClient<typeof CaptureApi>;
@@ -34,6 +36,7 @@ export class DbgServiceClient {
 
 	public constructor(connection: LinkRpcConnection<undefined>) {
 		this.service = connection.get(ServiceApiRoot);
+		this.discovery = connection.get(DiscoveryApiRoot);
 		this.contexts = connection.get(ContextApiRoot);
 		this.sources = connection.get(SourceApiRoot);
 		this.captures = connection.get(CaptureApiRoot);

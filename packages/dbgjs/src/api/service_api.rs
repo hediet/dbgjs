@@ -5,6 +5,8 @@ pub use errors::*;
 
 mod service;
 pub use service::*;
+mod discovery;
+pub use discovery::*;
 mod context;
 pub use context::*;
 mod source;
