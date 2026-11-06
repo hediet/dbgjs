@@ -254,10 +254,12 @@ file for diffing.
 
 V8 stores at most 1,024 characters of each string in a snapshot by default.
 Such strings are grouped only with copies of identical prefix and size. Capture
-with `dbgjs heap capture --full-strings` to store complete texts; on Node.js
-targets this raises V8's `--heap-snapshot-string-limit` for all later
-snapshots. Chromium-based targets need `--js-flags=--heap-snapshot-string-limit=<n>`
-at launch.
+with `dbgjs heap capture --full-strings` to store complete texts; on plain
+Node.js targets this raises V8's `--heap-snapshot-string-limit` for all later
+snapshots. Chromium freezes V8 flags after startup, so browsers and every
+Electron process, including VS Code's extension host, need
+`--js-flags=--heap-snapshot-string-limit=<n>` at launch (VS Code also reads
+`"js-flags"` from `argv.json`).
 
 ## Screenshots
 
