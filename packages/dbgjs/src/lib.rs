@@ -6,3 +6,4 @@ pub mod debugger;
 pub mod desktop;
 pub mod service;
 pub mod source;
+pub mod timing;

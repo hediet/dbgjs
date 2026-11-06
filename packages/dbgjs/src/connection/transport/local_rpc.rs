@@ -418,6 +418,7 @@ async fn connect_endpoint_with_validation(
         #[cfg(windows)]
         LocalTransportEndpoint::NamedPipe { pipe_name } => {
             let stream = open_named_pipe(pipe_name).await?;
+            crate::timing::mark("ipc: pipe opened");
             connect_stream(stream, &endpoint.token, validate_interface).await
         }
         #[cfg(unix)]
@@ -473,27 +474,61 @@ where
     Ok(DbgServiceClient::new(connection))
 }
 
+/// `(interface id, schema hash)` of every interface this client speaks. Hashing serializes each
+/// full schema, so it is computed once per process.
+fn expected_interface_hashes() -> &'static [(String, String)] {
+    static HASHES: std::sync::OnceLock<Vec<(String, String)>> = std::sync::OnceLock::new();
+    HASHES.get_or_init(|| {
+        service_api::interfaces()
+            .iter()
+            .map(|interface| (interface.id().to_owned(), interface.schema_hash().to_owned()))
+            .collect()
+    })
+}
+
+/// Checks all expected interfaces against one unfiltered directory listing: a round trip per
+/// interface dominated the latency of every CLI command.
 async fn validate_interfaces(directory: &DirectoryServiceClient) -> Result<(), LocalRpcError> {
-    for expected in service_api::interfaces() {
-        let listing = directory
+    let expected = expected_interface_hashes();
+    crate::timing::mark("ipc: expected schema hashes computed");
+    let mut listed = Vec::new();
+    let mut cursor = None;
+    loop {
+        let page = directory
             .list(DirectoryListParams {
-                interface_id: Some(expected.id().to_owned()),
+                cursor,
                 ..Default::default()
             })
             .await
             .map_err(|error| LocalRpcError::Rpc(format!("{error:?}")))?;
-        let Some(actual) = listing
-            .items
+        listed.extend(page.items);
+        match page.next_cursor {
+            Some(next) => cursor = Some(next),
+            None => break,
+        }
+    }
+    crate::timing::mark("ipc: directory listed");
+    check_interface_hashes(
+        expected,
+        listed
             .iter()
-            .find(|item| item.interface_id == expected.id())
-        else {
-            return Err(LocalRpcError::InterfaceMissing(expected.id().to_owned()));
+            .map(|item| (item.interface_id.as_str(), item.interface_hash.as_str())),
+    )
+}
+
+fn check_interface_hashes<'a>(
+    expected: &[(String, String)],
+    listed: impl Iterator<Item = (&'a str, &'a str)> + Clone,
+) -> Result<(), LocalRpcError> {
+    for (interface_id, expected_hash) in expected {
+        let Some((_, actual_hash)) = listed.clone().find(|(id, _)| id == interface_id) else {
+            return Err(LocalRpcError::InterfaceMissing(interface_id.clone()));
         };
-        if actual.interface_hash != expected.schema_hash() {
+        if actual_hash != expected_hash {
             return Err(LocalRpcError::InterfaceHashMismatch {
-                interface_id: expected.id().to_owned(),
-                expected: expected.schema_hash().to_owned(),
-                actual: actual.interface_hash.clone(),
+                interface_id: interface_id.clone(),
+                expected: expected_hash.clone(),
+                actual: actual_hash.to_owned(),
             });
         }
     }
@@ -502,12 +537,15 @@ async fn validate_interfaces(directory: &DirectoryServiceClient) -> Result<(), L
 
 pub async fn connect_existing(state_file: &Path) -> Result<DbgServiceClient, LocalRpcError> {
     let endpoint = read_endpoint(state_file)?;
+    crate::timing::mark("ipc: endpoint read");
     let client = connect_endpoint(&endpoint).await?;
+    crate::timing::mark("ipc: connected and interfaces validated");
     let info = client
         .service
         .service_info()
         .await
         .map_err(|error| LocalRpcError::Rpc(format!("{error:?}")))?;
+    crate::timing::mark("ipc: service info");
     if info.process_id != endpoint.process_id {
         return Err(LocalRpcError::EndpointOwnerChanged {
             expected: endpoint.process_id,
@@ -855,6 +893,23 @@ pub enum LocalRpcError {
 mod tests {
     use super::*;
     use linkrpc::prelude::{CallCtx, JsonRpcError, RegisterOptions, link_rpc_interface};
+
+    #[test]
+    fn one_listing_validates_every_expected_interface() {
+        let expected = vec![("a".to_owned(), "1".to_owned()), ("b".to_owned(), "2".to_owned())];
+        let listed = [("other", "9"), ("b", "2"), ("a", "1")];
+        assert!(check_interface_hashes(&expected, listed.iter().copied()).is_ok());
+        assert!(matches!(
+            check_interface_hashes(&expected, [("a", "1")].iter().copied()),
+            Err(LocalRpcError::InterfaceMissing(id)) if id == "b"
+        ));
+        assert!(matches!(
+            check_interface_hashes(&expected, [("a", "1"), ("b", "3")].iter().copied()),
+            Err(LocalRpcError::InterfaceHashMismatch { interface_id, actual, .. })
+                if interface_id == "b" && actual == "3"
+        ));
+        assert_eq!(expected_interface_hashes().len(), service_api::interfaces().len());
+    }
 
     #[link_rpc_interface(id = "dev.dbgjs.cdp-debugger")]
     trait LegacyLifecycleApi {
