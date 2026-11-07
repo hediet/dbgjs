@@ -5312,17 +5312,22 @@ fn parse_heap_capture_options(values: &[String]) -> Result<HeapCaptureOptions, i
 
 /// V8 stores only the first `--heap-snapshot-string-limit` characters (1024
 /// by default) of each string in a snapshot. Node exposes V8 flags at runtime;
-/// the change applies to all later snapshots of the target.
+/// the change applies to all later snapshots of the target. Chromium, and so
+/// every Electron process, freezes V8 flags after startup
+/// (`--freeze-flags-after-init`) and silently ignores the change.
 async fn raise_heap_snapshot_string_limit(
     client: &DbgServiceClient,
     scope: &ResolvedScope,
 ) -> Result<(), Box<dyn std::error::Error>> {
     const EXPRESSION: &str = "(() => { \
         const process = globalThis.process; \
+        if (process?.versions?.electron) return 'electron'; \
         const v8 = process?.getBuiltinModule?.('v8') ?? process?.mainModule?.require?.('v8'); \
-        if (!v8?.setFlagsFromString) return false; \
+        if (!v8?.setFlagsFromString) return 'no-v8'; \
         v8.setFlagsFromString('--heap-snapshot-string-limit=2147483647'); \
-        return true; })()";
+        return 'raised'; })()";
+    const LAUNCH_HINT: &str = "launch the app with --js-flags=--heap-snapshot-string-limit=<characters> \
+        (VS Code also reads \"js-flags\" from argv.json)";
     let value = rpc(client
         .targets
         .value_operation(
@@ -5336,15 +5341,20 @@ async fn raise_heap_snapshot_string_limit(
             2000,
         )
         .await)?;
-    if value.value != Some(serde_json::Value::Bool(true)) {
-        return Err(io::Error::other(format!(
-            "--full-strings needs a Node.js target with the v8 module (got {}); for Chromium-based \
-             targets, launch with --js-flags=--heap-snapshot-string-limit=<characters>",
+    match value.value.as_ref().and_then(serde_json::Value::as_str) {
+        Some("raised") => Ok(()),
+        Some("electron") => Err(io::Error::other(format!(
+            "--full-strings cannot raise the limit in an Electron process, which freezes V8 flags \
+             after startup; {LAUNCH_HINT}"
+        ))
+        .into()),
+        _ => Err(io::Error::other(format!(
+            "--full-strings needs a Node.js target with the v8 module (got {}); for browser targets, \
+             {LAUNCH_HINT}",
             value.display()
         ))
-        .into());
+        .into()),
     }
-    Ok(())
 }
 
 fn parse_heap_class_options(values: &[String]) -> Result<HeapClassOptions, io::Error> {
@@ -7761,7 +7771,7 @@ commands:
   dbgjs profile show [<name>] [--view <functions|files>] [--sort <self|total>] [--path <source-prefix>] [--max-lines <count>] [--context <id>]
   dbgjs profile export [<name>] --output <path> [--context <id>]
   dbgjs heap capture [--id <name>] [--capture-numeric-value] [--expose-internals] [--full-strings] [target scope]
-    --full-strings first raises V8's --heap-snapshot-string-limit (Node.js targets) so strings are stored in full
+    --full-strings first raises V8's --heap-snapshot-string-limit (plain Node.js only; Electron and browsers need --js-flags at launch)
   dbgjs capture list [--context <id>]
   dbgjs capture show <name> [--context <id>]
     renders the kind's default bounded view: coverage tree, CPU profile, or heap classes
