@@ -1,5 +1,5 @@
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::{Arc, Mutex, mpsc};
@@ -2268,6 +2268,46 @@ fn context_intent_survives_service_restart() {
     assert_eq!(history_gap["kind"], "historyGap");
     assert_eq!(history_gap["oldest_available_revision"], 3);
     assert_eq!(history_gap["current"]["revision"], 3);
+
+    run_json(&cli, &service, &state_file, &["service", "stop"]);
+    wait_until_removed(&state_file);
+    cleanup_persistent_state(&state_file);
+    cleanup.disarm();
+}
+
+#[test]
+fn piped_output_ends_when_the_client_starts_the_service() {
+    let state_file = std::env::temp_dir().join(format!(
+        "dbgjs-cli-piped-{}-{}.json",
+        std::process::id(),
+        unique_suffix()
+    ));
+    let cli = PathBuf::from(env!("CARGO_BIN_EXE_dbgjs"));
+    let service = PathBuf::from(env!("CARGO_BIN_EXE_dbgjs-service"));
+    let cleanup = ServiceCleanup::new(cli.clone(), service.clone(), state_file.clone());
+
+    let mut child = Command::new(&cli)
+        .args(["context", "list"])
+        .env("DBGJS_SERVICE_EXE", &service)
+        .env("DBGJS_SERVICE_STATE", &state_file)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut stdout = child.stdout.take().unwrap();
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let mut output = Vec::new();
+        let _ = sender.send(stdout.read_to_end(&mut output).map(|_| output));
+    });
+    // The reader only sees end of file once every holder of the pipe's write end exits.
+    let output = receiver
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the started service must not keep the client's stdout pipe open")
+        .unwrap();
+    assert!(child.wait().unwrap().success());
+    assert!(String::from_utf8_lossy(&output).contains("context"));
 
     run_json(&cli, &service, &state_file, &["service", "stop"]);
     wait_until_removed(&state_file);

@@ -769,6 +769,7 @@ fn spawn_detached(command: &mut Command) -> Result<std::process::Child, std::io:
     const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
     const DETACHED_PROCESS: u32 = 0x0000_0008;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let _std_handles = StdHandlesNotInherited::new();
     command.creation_flags(CREATE_BREAKAWAY_FROM_JOB | CREATE_NO_WINDOW);
     match command.spawn() {
         Ok(child) => Ok(child),
@@ -784,6 +785,57 @@ fn spawn_detached(command: &mut Command) -> Result<std::process::Child, std::io:
             }
         }
         Err(error) => Err(error),
+    }
+}
+
+/// `CreateProcess` passes every inheritable handle to the child, not only the
+/// stdio handles it is given. A service that inherits the client's stdout pipe
+/// keeps it open for its whole lifetime, so a shell reading the client's output
+/// (for example `dbgjs context list | Select-Object`) never sees end of file.
+/// The client's own handles stay usable; only their inheritance is suspended
+/// while the service is spawned.
+#[cfg(windows)]
+struct StdHandlesNotInherited(Vec<windows_sys::Win32::Foundation::HANDLE>);
+
+#[cfg(windows)]
+impl StdHandlesNotInherited {
+    fn new() -> Self {
+        use windows_sys::Win32::Foundation::{
+            GetHandleInformation, HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE, SetHandleInformation,
+        };
+        use windows_sys::Win32::System::Console::{
+            GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
+        };
+        let mut suspended = Vec::new();
+        for id in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
+            // SAFETY: querying and changing flags of this process's own std handles.
+            unsafe {
+                let handle = GetStdHandle(id);
+                let mut flags = 0;
+                if !handle.is_null()
+                    && handle != INVALID_HANDLE_VALUE
+                    && GetHandleInformation(handle, &mut flags) != 0
+                    && flags & HANDLE_FLAG_INHERIT != 0
+                    && SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0) != 0
+                {
+                    suspended.push(handle);
+                }
+            }
+        }
+        Self(suspended)
+    }
+}
+
+#[cfg(windows)]
+impl Drop for StdHandlesNotInherited {
+    fn drop(&mut self) {
+        use windows_sys::Win32::Foundation::{HANDLE_FLAG_INHERIT, SetHandleInformation};
+        for &handle in &self.0 {
+            // SAFETY: restores the flag cleared in `new` on a handle this process owns.
+            unsafe {
+                SetHandleInformation(handle, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT);
+            }
+        }
     }
 }
 
