@@ -378,6 +378,7 @@ async function activateInspector(pid) {
 	}
 
 	const marker = join(tmpdir(), `dbgjs-inspector-${pid}-${randomUUID()}.json`);
+	const markerFromHere = pathInProcessFileSystem(pid, marker);
 	const token = randomUUID();
 	const expression = `(() => {
 		const fs = process.getBuiltinModule("fs");
@@ -409,13 +410,13 @@ async function activateInspector(pid) {
 
 	const rotated = await poll(async () => {
 		try {
-			const value = JSON.parse(await readFile(marker, "utf8"));
+			const value = JSON.parse(await readFile(markerFromHere, "utf8"));
 			return value.token === token ? value : undefined;
 		} catch {
 			return undefined;
 		}
 	}, 10_000);
-	await rm(marker, { force: true });
+	await rm(markerFromHere, { force: true });
 	if (!rotated) {
 		throw new Error("timed out while moving the inspector to an ephemeral port");
 	}
@@ -427,6 +428,12 @@ async function activateInspector(pid) {
 	}
 	knownEndpoints.set(pid, rotated.endpoint);
 	return rotated.endpoint;
+}
+
+// A path as the process `pid` sees it, readable from here. On Linux, through /proc, so this also
+// works from another mount namespace (e.g. dbgjs in a sidecar container sharing only PIDs).
+function pathInProcessFileSystem(pid, path, platform = process.platform) {
+	return platform === "linux" ? `/proc/${pid}/root${path}` : path;
 }
 
 function electronFusePath(executable, platform = process.platform) {
@@ -573,7 +580,7 @@ async function approvalBrowserEndpoint(root, listeners) {
 	const file = join(directory, "DevToolsActivePort");
 	let contents;
 	try {
-		contents = await readFile(file, "utf8");
+		contents = await readFile(pathInProcessFileSystem(root.pid, file), "utf8");
 	} catch (error) {
 		if (error?.code === "ENOENT") {
 			throw userFacingError(`remote debugging is off for browser process ${root.pid} (its profile has no `
