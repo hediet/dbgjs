@@ -349,8 +349,10 @@ async function activateInspector(pid) {
 		const candidate = (await listProcesses()).find((candidate) => candidate.pid === pid);
 		if (!candidate) throw new Error(`process ${pid} no longer exists`);
 		if (!["node", "nodejs"].includes(candidate.name.toLowerCase())) {
+			// On Linux, open the executable through /proc: its path may not exist in our mount
+			// namespace (e.g. dbgjs in a sidecar container sharing only the PID namespace).
 			const executable = process.platform === "linux"
-				? await readlink(`/proc/${pid}/exe`)
+				? `/proc/${pid}/exe`
 				: candidate.executablePath;
 			await assertElectronInspectorSignalSupported(candidate, electronFusePath(executable));
 		}
