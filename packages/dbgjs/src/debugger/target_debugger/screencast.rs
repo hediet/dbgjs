@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 use std::collections::VecDeque;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
+use crate::debugger::cdp_runtime::{RawCdpEvent, RawCdpTarget};
 use tokio::sync::Notify;
 
 /// Clicks, wheel, and key events that may wait for the page; mouse moves are coalesced.
@@ -17,239 +18,287 @@ const STOP_TIMEOUT: Duration = Duration::from_secs(2);
 const FIRST_FRAME_KICK_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_FRAME_WINDOW: u8 = 5;
 
+/// What a screencast needs from a page: its CDP session's ID, raw requests, and raw events.
+#[async_trait::async_trait]
+pub trait ScreencastTarget: Clone + Send + Sync + 'static {
+    fn session_id(&self) -> &str;
+    fn subscribe_raw_events(&self) -> broadcast::Receiver<RawCdpEvent>;
+    async fn raw_cdp_request(&self, method: String, params: Value) -> Result<Value, JsonRpcError>;
+}
+
+#[async_trait::async_trait]
+impl ScreencastTarget for TargetDebuggerHandle {
+    fn session_id(&self) -> &str {
+        &self.session_id
+    }
+
+    fn subscribe_raw_events(&self) -> broadcast::Receiver<RawCdpEvent> {
+        self.raw_events.subscribe()
+    }
+
+    async fn raw_cdp_request(&self, method: String, params: Value) -> Result<Value, JsonRpcError> {
+        TargetDebuggerHandle::raw_cdp_request(self, method, params).await
+    }
+}
+
+#[async_trait::async_trait]
+impl ScreencastTarget for RawCdpTarget {
+    fn session_id(&self) -> &str {
+        RawCdpTarget::session_id(self)
+    }
+
+    fn subscribe_raw_events(&self) -> broadcast::Receiver<RawCdpEvent> {
+        RawCdpTarget::subscribe_raw_events(self)
+    }
+
+    async fn raw_cdp_request(&self, method: String, params: Value) -> Result<Value, JsonRpcError> {
+        RawCdpTarget::raw_cdp_request(self, &method, params).await
+    }
+}
+
 impl TargetDebuggerHandle {
-    /// Runs one screencast of this target until `input` ends (`Ok`) or the target fails (`Err`).
-    /// Frames go to `output`. Up to `options.window` frames may await the client's ack; the
-    /// browser renders the next frame only after the service acks the previous one, which it
-    /// does as soon as that frame can be sent, so at most one newer frame waits in the service.
-    /// Pointer and key input is dispatched in order on a separate task, so a blocking input
-    /// dispatch (e.g. a native context menu) does not stall frames. Chromium answers input for
-    /// hidden pages (e.g. minimized windows) only after seconds, so moves waiting for dispatch
-    /// collapse into the latest one.
+    /// See [`screencast`].
     pub async fn screencast(
         &self,
         options: ScreencastOptions,
-        mut input: mpsc::Receiver<ScreencastInput>,
+        input: mpsc::Receiver<ScreencastInput>,
         output: mpsc::Sender<ScreencastMessage>,
     ) -> Result<ScreencastSummary, JsonRpcError> {
-        let window = usize::from(options.window.unwrap_or(1));
-        if !(1..=usize::from(MAX_FRAME_WINDOW)).contains(&window) {
-            return Err(JsonRpcError::new(error_codes::INVALID_PARAMS, "window must be in 1..=5"));
-        }
-        let mut events = self.raw_events.subscribe();
-        self.raw_cdp_request("Page.enable".into(), json!({})).await?;
-        // Without interception, an HTML5 drag starts the OS drag loop, which never sees CDP input.
-        // Browsers that cannot intercept still screencast; their drags just do not reach the page.
-        let _ = self.raw_cdp_request("Input.setInterceptDrags".into(), json!({ "enabled": true })).await;
-        self.start_screencast(&options, options.size).await?;
-        let kick = self.clone();
-        let first_frame_kick = tokio::spawn(async move {
-            // Forces a compositor frame so an idle page still produces its first screencast frame.
-            let _ = tokio::time::timeout(
-                FIRST_FRAME_KICK_TIMEOUT,
-                kick.raw_cdp_request("Page.captureScreenshot".into(), json!({ "format": "jpeg", "quality": 1 })),
-            ).await;
-        });
-        let pending_input = Arc::new(InputQueue::default());
-        // Set whenever the page zoom may have changed; the dispatcher then re-reads it before the next mouse event.
-        let zoom_stale = Arc::new(AtomicBool::new(true));
-        let drag = DragSlot::default();
-        let mut dispatcher = tokio::spawn(dispatch_input(self.clone(), pending_input.clone(), zoom_stale.clone(), drag.clone()));
-        let mut frames = 0u64;
-        // Frames sent to the client and not yet acked by it.
-        let mut in_flight: Vec<u64> = Vec::with_capacity(window);
-        // A frame the window had no room for; the browser waits for its ack.
-        let mut held: Option<ScreencastMessage> = None;
-        let mut viewport_overridden = false;
-        let result = loop {
-            tokio::select! {
-                biased;
-                failure = &mut dispatcher => break Err(match failure {
-                    Ok(Err(error)) => error,
-                    Ok(Ok(())) => internal_error("screencast input dispatcher stopped"),
-                    Err(error) => internal_error(&format!("screencast input dispatcher failed: {error}")),
-                }),
-                message = input.recv() => match message {
-                    None => break Ok(()),
-                    Some(ScreencastInput::FrameAck { frame_id }) => {
-                        let Some(position) = in_flight.iter().position(|id| *id == frame_id) else {
-                            continue;
-                        };
-                        in_flight.remove(position);
-                        if let Some(frame) = held.take() {
-                            match self.forward_frame(frame, &mut in_flight, &output).await {
-                                Ok(true) => frames += 1,
-                                Ok(false) => break Ok(()),
-                                Err(error) => break Err(error),
-                            }
+        screencast(self, options, input, output).await
+    }
+}
+
+/// Runs one screencast of this target until `input` ends (`Ok`) or the target fails (`Err`).
+/// Frames go to `output`. Up to `options.window` frames may await the client's ack; the
+/// browser renders the next frame only after the service acks the previous one, which it
+/// does as soon as that frame can be sent, so at most one newer frame waits in the service.
+/// Pointer and key input is dispatched in order on a separate task, so a blocking input
+/// dispatch (e.g. a native context menu) does not stall frames. Chromium answers input for
+/// hidden pages (e.g. minimized windows) only after seconds, so moves waiting for dispatch
+/// collapse into the latest one.
+pub async fn screencast<T: ScreencastTarget>(
+    target: &T,
+    options: ScreencastOptions,
+    mut input: mpsc::Receiver<ScreencastInput>,
+    output: mpsc::Sender<ScreencastMessage>,
+) -> Result<ScreencastSummary, JsonRpcError> {
+    let window = usize::from(options.window.unwrap_or(1));
+    if !(1..=usize::from(MAX_FRAME_WINDOW)).contains(&window) {
+        return Err(JsonRpcError::new(error_codes::INVALID_PARAMS, "window must be in 1..=5"));
+    }
+    let mut events = target.subscribe_raw_events();
+    target.raw_cdp_request("Page.enable".into(), json!({})).await?;
+    // Without interception, an HTML5 drag starts the OS drag loop, which never sees CDP input.
+    // Browsers that cannot intercept still screencast; their drags just do not reach the page.
+    let _ = target.raw_cdp_request("Input.setInterceptDrags".into(), json!({ "enabled": true })).await;
+    start_screencast(target, &options, options.size).await?;
+    let kick = target.clone();
+    let first_frame_kick = tokio::spawn(async move {
+        // Forces a compositor frame so an idle page still produces its first screencast frame.
+        let _ = tokio::time::timeout(
+            FIRST_FRAME_KICK_TIMEOUT,
+            kick.raw_cdp_request("Page.captureScreenshot".into(), json!({ "format": "jpeg", "quality": 1 })),
+        ).await;
+    });
+    let pending_input = Arc::new(InputQueue::default());
+    // Set whenever the page zoom may have changed; the dispatcher then re-reads it before the next mouse event.
+    let zoom_stale = Arc::new(AtomicBool::new(true));
+    let drag = DragSlot::default();
+    let mut dispatcher = tokio::spawn(dispatch_input(target.clone(), pending_input.clone(), zoom_stale.clone(), drag.clone()));
+    let mut frames = 0u64;
+    // Frames sent to the client and not yet acked by it.
+    let mut in_flight: Vec<u64> = Vec::with_capacity(window);
+    // A frame the window had no room for; the browser waits for its ack.
+    let mut held: Option<ScreencastMessage> = None;
+    let mut viewport_overridden = false;
+    let result = loop {
+        tokio::select! {
+            biased;
+            failure = &mut dispatcher => break Err(match failure {
+                Ok(Err(error)) => error,
+                Ok(Ok(())) => internal_error("screencast input dispatcher stopped"),
+                Err(error) => internal_error(&format!("screencast input dispatcher failed: {error}")),
+            }),
+            message = input.recv() => match message {
+                None => break Ok(()),
+                Some(ScreencastInput::FrameAck { frame_id }) => {
+                    let Some(position) = in_flight.iter().position(|id| *id == frame_id) else {
+                        continue;
+                    };
+                    in_flight.remove(position);
+                    if let Some(frame) = held.take() {
+                        match forward_frame(target, frame, &mut in_flight, &output).await {
+                            Ok(true) => frames += 1,
+                            Ok(false) => break Ok(()),
+                            Err(error) => break Err(error),
                         }
                     }
-                    Some(ScreencastInput::Resize(size)) => {
-                        in_flight.clear();
-                        held = None;
-                        if let Err(error) = self.raw_cdp_request("Page.stopScreencast".into(), json!({})).await {
-                            break Err(error);
-                        }
-                        if let Err(error) = self.start_screencast(&options, Some(size)).await {
-                            break Err(error);
-                        }
+                }
+                Some(ScreencastInput::Resize(size)) => {
+                    in_flight.clear();
+                    held = None;
+                    if let Err(error) = target.raw_cdp_request("Page.stopScreencast".into(), json!({})).await {
+                        break Err(error);
                     }
-                    Some(ScreencastInput::Viewport(viewport)) => {
-                        if let Err(error) = self.override_viewport(viewport).await {
+                    if let Err(error) = start_screencast(target, &options, Some(size)).await {
+                        break Err(error);
+                    }
+                }
+                Some(ScreencastInput::Viewport(viewport)) => {
+                    if let Err(error) = override_viewport(target, viewport).await {
+                        break Err(error);
+                    }
+                    viewport_overridden = true;
+                    zoom_stale.store(true, Ordering::SeqCst);
+                }
+                Some(ScreencastInput::ResetViewport) => {
+                    if viewport_overridden {
+                        if let Err(error) = target.raw_cdp_request("Emulation.clearDeviceMetricsOverride".into(), json!({})).await {
                             break Err(error);
                         }
-                        viewport_overridden = true;
+                        viewport_overridden = false;
                         zoom_stale.store(true, Ordering::SeqCst);
                     }
-                    Some(ScreencastInput::ResetViewport) => {
-                        if viewport_overridden {
-                            if let Err(error) = self.raw_cdp_request("Emulation.clearDeviceMetricsOverride".into(), json!({})).await {
-                                break Err(error);
-                            }
-                            viewport_overridden = false;
-                            zoom_stale.store(true, Ordering::SeqCst);
-                        }
+                }
+                Some(command) => {
+                    if !pending_input.push(command) {
+                        break Err(invalid_state(
+                            "screencast input queue overflow; clicks and keys are arriving faster than the page handles them (hidden pages handle input slowly)",
+                        ));
                     }
-                    Some(command) => {
-                        if !pending_input.push(command) {
-                            break Err(invalid_state(
-                                "screencast input queue overflow; clicks and keys are arriving faster than the page handles them (hidden pages handle input slowly)",
-                            ));
-                        }
-                    }
-                },
-                event = events.recv() => match event {
-                    Ok(event) if event.session.session_id != self.session_id => {}
-                    Ok(event) => match event.method.as_str() {
-                        "Page.screencastFrame" => {
-                            let frame = match parse_frame(&options, &event.params) {
-                                Ok(frame) => frame,
-                                Err(error) => break Err(error),
-                            };
-                            // A zoom change repaints, so every zoom change is followed by a frame.
-                            zoom_stale.store(true, Ordering::SeqCst);
-                            if in_flight.len() >= window {
-                                held = Some(frame);
-                                continue;
-                            }
-                            match self.forward_frame(frame, &mut in_flight, &output).await {
-                                Ok(true) => frames += 1,
-                                Ok(false) => break Ok(()),
-                                Err(error) => break Err(error),
-                            }
-                        }
-                        "Page.screencastVisibilityChanged" => {
-                            let visible = event.params.get("visible").and_then(Value::as_bool).unwrap_or(true);
-                            if output.send(ScreencastMessage::Visibility { visible }).await.is_err() {
-                                break Ok(());
-                            }
-                        }
-                        "Input.dragIntercepted" => {
-                            let data = event.params.get("data").cloned().unwrap_or(Value::Null);
-                            *drag.lock().unwrap() = Some(InterceptedDrag { data, entered: false });
-                        }
-                        "Inspector.detached" => {
-                            break Err(JsonRpcError::new(error_codes::PEER_DISCONNECTED, "target detached during screencast"));
-                        }
-                        _ => {}
-                    },
-                    Err(broadcast::error::RecvError::Lagged(count)) => {
-                        break Err(invalid_state(&format!("screencast lost {count} target events; restart the screencast")));
-                    }
-                    Err(broadcast::error::RecvError::Closed) => {
-                        break Err(JsonRpcError::new(error_codes::PEER_DISCONNECTED, "target debugger stopped during screencast"));
-                    }
-                },
-            }
-        };
-        dispatcher.abort();
-        first_frame_kick.abort();
-        let unfinished_drag = drag.lock().unwrap().take();
-        if let Some(drag) = unfinished_drag {
-            let _ = tokio::time::timeout(
-                STOP_TIMEOUT,
-                self.raw_cdp_request("Input.dispatchDragEvent".into(), drag_event("dragCancel", 0.0, 0.0, &drag.data, 0)),
-            ).await;
-        }
-        let _ = tokio::time::timeout(
-            STOP_TIMEOUT,
-            self.raw_cdp_request("Input.setInterceptDrags".into(), json!({ "enabled": false })),
-        ).await;
-        if viewport_overridden {
-            let _ = tokio::time::timeout(
-                STOP_TIMEOUT,
-                self.raw_cdp_request("Emulation.clearDeviceMetricsOverride".into(), json!({})),
-            ).await;
-        }
-        let _ = tokio::time::timeout(
-            STOP_TIMEOUT,
-            self.raw_cdp_request("Page.stopScreencast".into(), json!({})),
-        ).await;
-        result.map(|()| ScreencastSummary { frames })
-    }
-
-    /// Sends `frame` to the client and acks it to the browser, which then renders the next one.
-    /// Returns `false` once the client is gone.
-    async fn forward_frame(
-        &self,
-        frame: ScreencastMessage,
-        in_flight: &mut Vec<u64>,
-        output: &mpsc::Sender<ScreencastMessage>,
-    ) -> Result<bool, JsonRpcError> {
-        let ScreencastMessage::Frame { frame_id, .. } = &frame else {
-            return Err(internal_error("only frames are forwarded through the frame window"));
-        };
-        let frame_id = *frame_id;
-        if output.send(frame).await.is_err() {
-            return Ok(false);
-        }
-        in_flight.push(frame_id);
-        self.raw_cdp_request("Page.screencastFrameAck".into(), json!({ "sessionId": frame_id })).await?;
-        Ok(true)
-    }
-
-    async fn start_screencast(
-        &self,
-        options: &ScreencastOptions,
-        size: Option<ScreencastSize>,
-    ) -> Result<(), JsonRpcError> {
-        let mut params = json!({
-            "format": match options.format {
-                ScreencastFormat::Jpeg => "jpeg",
-                ScreencastFormat::Png => "png",
+                }
             },
-            "everyNthFrame": 1,
-        });
-        if let Some(quality) = options.quality {
-            if quality > 100 {
-                return Err(JsonRpcError::new(error_codes::INVALID_PARAMS, "quality must be in 0..=100"));
-            }
-            params["quality"] = json!(quality);
+            event = events.recv() => match event {
+                Ok(event) if event.session.session_id != target.session_id() => {}
+                Ok(event) => match event.method.as_str() {
+                    "Page.screencastFrame" => {
+                        let frame = match parse_frame(&options, &event.params) {
+                            Ok(frame) => frame,
+                            Err(error) => break Err(error),
+                        };
+                        // A zoom change repaints, so every zoom change is followed by a frame.
+                        zoom_stale.store(true, Ordering::SeqCst);
+                        if in_flight.len() >= window {
+                            held = Some(frame);
+                            continue;
+                        }
+                        match forward_frame(target, frame, &mut in_flight, &output).await {
+                            Ok(true) => frames += 1,
+                            Ok(false) => break Ok(()),
+                            Err(error) => break Err(error),
+                        }
+                    }
+                    "Page.screencastVisibilityChanged" => {
+                        let visible = event.params.get("visible").and_then(Value::as_bool).unwrap_or(true);
+                        if output.send(ScreencastMessage::Visibility { visible }).await.is_err() {
+                            break Ok(());
+                        }
+                    }
+                    "Input.dragIntercepted" => {
+                        let data = event.params.get("data").cloned().unwrap_or(Value::Null);
+                        *drag.lock().unwrap() = Some(InterceptedDrag { data, entered: false });
+                    }
+                    "Inspector.detached" => {
+                        break Err(JsonRpcError::new(error_codes::PEER_DISCONNECTED, "target detached during screencast"));
+                    }
+                    _ => {}
+                },
+                Err(broadcast::error::RecvError::Lagged(count)) => {
+                    break Err(invalid_state(&format!("screencast lost {count} target events; restart the screencast")));
+                }
+                Err(broadcast::error::RecvError::Closed) => {
+                    break Err(JsonRpcError::new(error_codes::PEER_DISCONNECTED, "target debugger stopped during screencast"));
+                }
+            },
         }
-        if let Some(size) = size {
-            if size.max_width == 0 || size.max_height == 0 {
-                return Err(JsonRpcError::new(error_codes::INVALID_PARAMS, "screencast size must be positive"));
-            }
-            params["maxWidth"] = json!(size.max_width);
-            params["maxHeight"] = json!(size.max_height);
-        }
-        self.raw_cdp_request("Page.startScreencast".into(), params).await.map(drop)
+    };
+    dispatcher.abort();
+    first_frame_kick.abort();
+    let unfinished_drag = drag.lock().unwrap().take();
+    if let Some(drag) = unfinished_drag {
+        let _ = tokio::time::timeout(
+            STOP_TIMEOUT,
+            target.raw_cdp_request("Input.dispatchDragEvent".into(), drag_event("dragCancel", 0.0, 0.0, &drag.data, 0)),
+        ).await;
     }
+    let _ = tokio::time::timeout(
+        STOP_TIMEOUT,
+        target.raw_cdp_request("Input.setInterceptDrags".into(), json!({ "enabled": false })),
+    ).await;
+    if viewport_overridden {
+        let _ = tokio::time::timeout(
+            STOP_TIMEOUT,
+            target.raw_cdp_request("Emulation.clearDeviceMetricsOverride".into(), json!({})),
+        ).await;
+    }
+    let _ = tokio::time::timeout(
+        STOP_TIMEOUT,
+        target.raw_cdp_request("Page.stopScreencast".into(), json!({})),
+    ).await;
+    result.map(|()| ScreencastSummary { frames })
+}
 
-    async fn override_viewport(&self, viewport: ScreencastViewport) -> Result<(), JsonRpcError> {
-        if viewport.width == 0 || viewport.height == 0 || viewport.width > 16_384 || viewport.height > 16_384 {
-            return Err(JsonRpcError::new(error_codes::INVALID_PARAMS, "viewport size must be in 1..=16384"));
-        }
-        if !(viewport.device_scale_factor > 0.0 && viewport.device_scale_factor <= 8.0) {
-            return Err(JsonRpcError::new(error_codes::INVALID_PARAMS, "viewport deviceScaleFactor must be in (0, 8]"));
-        }
-        self.raw_cdp_request("Emulation.setDeviceMetricsOverride".into(), json!({
-            "width": viewport.width,
-            "height": viewport.height,
-            "deviceScaleFactor": viewport.device_scale_factor,
-            "mobile": false,
-        })).await.map(drop)
+/// Sends `frame` to the client and acks it to the browser, which then renders the next one.
+/// Returns `false` once the client is gone.
+async fn forward_frame<T: ScreencastTarget>(
+    target: &T,
+    frame: ScreencastMessage,
+    in_flight: &mut Vec<u64>,
+    output: &mpsc::Sender<ScreencastMessage>,
+) -> Result<bool, JsonRpcError> {
+    let ScreencastMessage::Frame { frame_id, .. } = &frame else {
+        return Err(internal_error("only frames are forwarded through the frame window"));
+    };
+    let frame_id = *frame_id;
+    if output.send(frame).await.is_err() {
+        return Ok(false);
     }
+    in_flight.push(frame_id);
+    target.raw_cdp_request("Page.screencastFrameAck".into(), json!({ "sessionId": frame_id })).await?;
+    Ok(true)
+}
+
+async fn start_screencast<T: ScreencastTarget>(
+    target: &T,
+    options: &ScreencastOptions,
+    size: Option<ScreencastSize>,
+) -> Result<(), JsonRpcError> {
+    let mut params = json!({
+        "format": match options.format {
+            ScreencastFormat::Jpeg => "jpeg",
+            ScreencastFormat::Png => "png",
+        },
+        "everyNthFrame": 1,
+    });
+    if let Some(quality) = options.quality {
+        if quality > 100 {
+            return Err(JsonRpcError::new(error_codes::INVALID_PARAMS, "quality must be in 0..=100"));
+        }
+        params["quality"] = json!(quality);
+    }
+    if let Some(size) = size {
+        if size.max_width == 0 || size.max_height == 0 {
+            return Err(JsonRpcError::new(error_codes::INVALID_PARAMS, "screencast size must be positive"));
+        }
+        params["maxWidth"] = json!(size.max_width);
+        params["maxHeight"] = json!(size.max_height);
+    }
+    target.raw_cdp_request("Page.startScreencast".into(), params).await.map(drop)
+}
+
+async fn override_viewport<T: ScreencastTarget>(target: &T, viewport: ScreencastViewport) -> Result<(), JsonRpcError> {
+    if viewport.width == 0 || viewport.height == 0 || viewport.width > 16_384 || viewport.height > 16_384 {
+        return Err(JsonRpcError::new(error_codes::INVALID_PARAMS, "viewport size must be in 1..=16384"));
+    }
+    if !(viewport.device_scale_factor > 0.0 && viewport.device_scale_factor <= 8.0) {
+        return Err(JsonRpcError::new(error_codes::INVALID_PARAMS, "viewport deviceScaleFactor must be in (0, 8]"));
+    }
+    target.raw_cdp_request("Emulation.setDeviceMetricsOverride".into(), json!({
+        "width": viewport.width,
+        "height": viewport.height,
+        "deviceScaleFactor": viewport.device_scale_factor,
+        "mobile": false,
+    })).await.map(drop)
 }
 
 /// Mouse and key input waiting for the dispatcher, in order. A mouse move replaces a move queued
@@ -351,8 +400,8 @@ fn held_button(buttons: u32) -> ScreencastMouseButton {
 }
 
 /// Dispatches queued input until the screencast aborts it; ends only when a dispatch fails.
-async fn dispatch_input(
-    target: TargetDebuggerHandle,
+async fn dispatch_input<T: ScreencastTarget>(
+    target: T,
     queue: Arc<InputQueue>,
     zoom_stale: Arc<AtomicBool>,
     drag: DragSlot,
@@ -409,7 +458,7 @@ async fn dispatch_input(
 }
 
 /// The page's CSS-to-device-independent pixel ratio (e.g. 1.2 for a page zoomed to 120%).
-async fn page_zoom(target: &TargetDebuggerHandle) -> Result<f64, JsonRpcError> {
+async fn page_zoom<T: ScreencastTarget>(target: &T) -> Result<f64, JsonRpcError> {
     let metrics = target.raw_cdp_request("Page.getLayoutMetrics".into(), json!({})).await?;
     // Chromium before 92 omits `zoom`; such pages were never zoomed for input purposes.
     Ok(metrics.pointer("/cssVisualViewport/zoom")

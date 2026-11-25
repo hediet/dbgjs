@@ -2646,48 +2646,9 @@ impl DebuggerService {
         }
         let (generation, debug_capability, waiting_for_debugger, source_model) = {
             let mut state = self.state.lock().await;
-            let connection = state
-                .contexts
-                .get(context_id)
-                .ok_or_else(|| not_found("context", context_id))?
-                .connections
-                .get(connection_id)
-                .ok_or_else(|| not_found("connection", connection_id))?;
-            let target = context_connection_target(
-                &state,
-                context_id,
-                connection_id,
-                connection.generation,
-                &resolved_target_id,
-            )
-            .ok_or_else(|| not_found("target", &resolved_target_id))?;
-            if !state
-                .runtimes
-                .contains_key(&(context_id.to_owned(), connection_id.to_owned()))
-            {
-                return Err(invalid_state("connection is not connected"));
-            }
-            let source = connection_source_id(connection_id, connection.generation);
-            let debug_capability = state
-                .resource_graphs
-                .get(context_id)
-                .and_then(|graph| {
-                    graph.read(|graph| {
-                        graph.capability_from_source(
-                            &target.resource_id,
-                            &source,
-                            &CapabilityKind::Debug,
-                        )
-                    })
-                })
-                .and_then(|capability| capability.as_debug())
-                .ok_or_else(|| {
-                    invalid_state(&format!(
-                        "target '{resolved_target_id}' has no available debug capability"
-                    ))
-                })?;
+            let (generation, debug_capability) =
+                connected_target_debug_capability(&state, context_id, connection_id, &resolved_target_id)?;
             let waiting_for_debugger = debug_capability.waiting_for_debugger();
-            let generation = connection.generation;
             let source_model = state
                 .source_models
                 .entry(context_id.to_owned())
@@ -3845,6 +3806,33 @@ fn context_connection_has_target(
     target_id: &str,
 ) -> bool {
     context_connection_target(state, context_id, connection_id, generation, target_id).is_some()
+}
+
+/// The debug capability of a connected target, with the connection's generation.
+fn connected_target_debug_capability(
+    state: &ServiceState,
+    context_id: &str,
+    connection_id: &str,
+    target_id: &str,
+) -> Result<(u64, Arc<dyn crate::api::capability::DebugCapability>), JsonRpcError> {
+    let generation = state
+        .contexts
+        .get(context_id)
+        .ok_or_else(|| not_found("context", context_id))?
+        .connections
+        .get(connection_id)
+        .ok_or_else(|| not_found("connection", connection_id))?
+        .generation;
+    if !context_connection_has_target(state, context_id, connection_id, generation, target_id) {
+        return Err(not_found("target", target_id));
+    }
+    if !state.runtimes.contains_key(&(context_id.to_owned(), connection_id.to_owned())) {
+        return Err(invalid_state("connection is not connected"));
+    }
+    let key = (context_id.to_owned(), connection_id.to_owned(), target_id.to_owned());
+    let capability = target_debug_capability(state, &key, generation)
+        .ok_or_else(|| invalid_state(&format!("target '{target_id}' has no available debug capability")))?;
+    Ok((generation, capability))
 }
 
 fn prepare_connection_target_update(
