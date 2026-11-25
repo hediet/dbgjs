@@ -46,11 +46,10 @@ impl DesktopApi for DebuggerService {
         mut input: StreamReceiver<DesktopClientMessage>,
         output: StreamSender<DesktopServerMessage>,
     ) -> Result<DesktopAttachResult, JsonRpcError> {
-        let (resolved, target_ref, title) = self.machine_target(ctx, &target).await?;
+        let (_, target_ref, title) = self.machine_target(ctx, &target).await?;
         let _activity = self.connection_activity(&target_ref.connection).await;
         let page = self.open_raw_target(&target_ref).await?;
-        let result =
-            crate::desktop::serve(page.target.clone(), resolved, title, options, &mut input, output, ctx.cancelled()).await;
+        let result = crate::desktop::serve(page.target.clone(), title, options, &mut input, output, ctx.cancelled()).await;
         page.close().await;
         result
     }

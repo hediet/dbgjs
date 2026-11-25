@@ -5,7 +5,7 @@ mod rfb;
 
 use crate::api::service_api::{
     DesktopAttachResult, DesktopClientMessage, DesktopCloseReason, DesktopLayout, DesktopOptions,
-    DesktopServerMessage, MachineTarget, ScreencastFormat, ScreencastFrameMetadata, ScreencastInput,
+    DesktopServerMessage, ScreencastFormat, ScreencastFrameMetadata, ScreencastInput,
     ScreencastMessage, ScreencastOptions, ScreencastSize, ScreencastViewport,
 };
 use crate::debugger::target_debugger::{ScreencastTarget, screencast};
@@ -35,7 +35,6 @@ const TITLE_POLL: std::time::Duration = std::time::Duration::from_secs(1);
 /// `cancelled` resolves (`Err` with `CANCELLED`).
 pub async fn serve<T: ScreencastTarget>(
     page: T,
-    target: MachineTarget,
     name: String,
     options: DesktopOptions,
     input: &mut StreamReceiver<DesktopClientMessage>,
@@ -56,7 +55,7 @@ pub async fn serve<T: ScreencastTarget>(
     // Aborted with the session, whichever way it ends.
     let _title_watch = AbortOnDrop(tokio::spawn(watch_title(page.clone(), name.clone(), title_sender)));
     let mut session = Session {
-        rfb: RfbServer::new(name.clone()),
+        rfb: RfbServer::new(name),
         mapper: InputMapper::default(),
         layout: options.layout,
         metadata: None,
@@ -66,7 +65,7 @@ pub async fn serve<T: ScreencastTarget>(
         screencast_input: Some(screencast_input),
         output,
     };
-    session.output.send(DesktopServerMessage::Ready { target, title: name }).await?;
+    session.output.send(DesktopServerMessage::Ready).await?;
     session.pump().await?;
     loop {
         tokio::select! {
