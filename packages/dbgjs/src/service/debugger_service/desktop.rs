@@ -4,6 +4,7 @@ use crate::api::service_api::{
     DesktopOptions, DesktopProtocol, DesktopServerMessage, IdleTimeout, MachineTarget, MachineTargetRef, MutationOptions,
     ProcessRootKind, ServiceApi,
 };
+use crate::debugger::cdp_runtime::RawCdpTarget;
 use linkrpc::prelude::StreamReceiver;
 
 /// The service-managed context that holds one process-tree connection per root for machine targets.
@@ -45,12 +46,51 @@ impl DesktopApi for DebuggerService {
         mut input: StreamReceiver<DesktopClientMessage>,
         output: StreamSender<DesktopServerMessage>,
     ) -> Result<DesktopAttachResult, JsonRpcError> {
-        let (_, target_ref, title) = self.machine_target(ctx, &target).await?;
+        let (resolved, target_ref, title) = self.machine_target(ctx, &target).await?;
         let _activity = self.connection_activity(&target_ref.connection).await;
-        let (debugger, owned) = self.stream_target(&target_ref, "desktop").await?;
-        let result = crate::desktop::serve(debugger.clone(), title, options, &mut input, output, ctx.cancelled()).await;
-        self.release_stream_target(&target_ref, &debugger, owned).await;
+        let page = self.open_raw_target(&target_ref).await?;
+        let result =
+            crate::desktop::serve(page.target.clone(), resolved, title, options, &mut input, output, ctx.cancelled()).await;
+        page.close().await;
         result
+    }
+}
+
+/// A CDP session a desktop opened for itself; [`RawTargetSession::close`] detaches it.
+struct RawTargetSession {
+    target: RawCdpTarget,
+    capability: Arc<dyn DebugCapability>,
+    handle: DebugSessionHandle,
+}
+
+impl RawTargetSession {
+    async fn close(self) {
+        if let Err(error) = self.capability.close(&self.handle).await {
+            eprintln!("failed to close a desktop's CDP session: {error}");
+        }
+    }
+}
+
+impl DebuggerService {
+    /// Opens a CDP session to `target_ref` without a target debugger: a desktop only streams
+    /// frames and input, and enabling the debugger takes seconds on pages with thousands of
+    /// scripts (e.g. Code OSS dev builds).
+    async fn open_raw_target(&self, target_ref: &TargetRef) -> Result<RawTargetSession, JsonRpcError> {
+        let ConnectionRef { context_id, connection_id } = &target_ref.connection;
+        let target_id = self.resolve_target_id(context_id, connection_id, &target_ref.target_id).await?;
+        let (_, capability) =
+            connected_target_debug_capability(&*self.state.lock().await, context_id, connection_id, &target_id)?;
+        let handle = capability
+            .open(DebugOpenRequest { pause_on_start: false, steal_existing_owner: false })
+            .await
+            .map_err(|error| direct_attachment_error(error.to_string(), false))?;
+        match capability.take_session(&handle) {
+            Ok(session) => Ok(RawTargetSession { target: session.into_raw_target(), capability, handle }),
+            Err(error) => {
+                let _ = capability.close(&handle).await;
+                Err(internal_error(error.to_string()))
+            }
+        }
     }
 }
 

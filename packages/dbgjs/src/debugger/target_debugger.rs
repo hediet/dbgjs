@@ -10,6 +10,7 @@ use sha2::{Digest, Sha256};
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 mod owned_values;
 mod screencast;
+pub use screencast::{ScreencastTarget, screencast};
 use crate::api::value::{DescribeOptions, ValueDescription, ValueOperation};
 
 use crate::capture::cpu::{

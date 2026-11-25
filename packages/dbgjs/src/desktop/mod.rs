@@ -5,10 +5,10 @@ mod rfb;
 
 use crate::api::service_api::{
     DesktopAttachResult, DesktopClientMessage, DesktopCloseReason, DesktopLayout, DesktopOptions,
-    DesktopServerMessage, ScreencastFormat, ScreencastFrameMetadata, ScreencastInput,
+    DesktopServerMessage, MachineTarget, ScreencastFormat, ScreencastFrameMetadata, ScreencastInput,
     ScreencastMessage, ScreencastOptions, ScreencastSize, ScreencastViewport,
 };
-use crate::debugger::target_debugger::TargetDebuggerHandle;
+use crate::debugger::target_debugger::{ScreencastTarget, screencast};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use input::InputMapper;
@@ -33,8 +33,9 @@ const TITLE_POLL: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// Runs one desktop session until the client ends its input (`Ok`), the screencast fails, or
 /// `cancelled` resolves (`Err` with `CANCELLED`).
-pub async fn serve(
-    debugger: TargetDebuggerHandle,
+pub async fn serve<T: ScreencastTarget>(
+    page: T,
+    target: MachineTarget,
     name: String,
     options: DesktopOptions,
     input: &mut StreamReceiver<DesktopClientMessage>,
@@ -43,7 +44,8 @@ pub async fn serve(
 ) -> Result<DesktopAttachResult, JsonRpcError> {
     let (screencast_input, screencast_input_receiver) = mpsc::channel(64);
     let (screencast_output, mut frames) = mpsc::channel(4);
-    let screencast = debugger.screencast(
+    let screencast = screencast(
+        &page,
         ScreencastOptions { format: ScreencastFormat::Png, quality: None, size: None, window: Some(FRAME_WINDOW) },
         screencast_input_receiver,
         screencast_output,
@@ -52,9 +54,9 @@ pub async fn serve(
     tokio::pin!(cancelled);
     let (title_sender, mut titles) = mpsc::channel(1);
     // Aborted with the session, whichever way it ends.
-    let _title_watch = AbortOnDrop(tokio::spawn(watch_title(debugger.clone(), name.clone(), title_sender)));
+    let _title_watch = AbortOnDrop(tokio::spawn(watch_title(page.clone(), name.clone(), title_sender)));
     let mut session = Session {
-        rfb: RfbServer::new(name),
+        rfb: RfbServer::new(name.clone()),
         mapper: InputMapper::default(),
         layout: options.layout,
         metadata: None,
@@ -64,7 +66,7 @@ pub async fn serve(
         screencast_input: Some(screencast_input),
         output,
     };
-    session.output.send(DesktopServerMessage::Ready).await?;
+    session.output.send(DesktopServerMessage::Ready { target, title: name }).await?;
     session.pump().await?;
     loop {
         tokio::select! {
@@ -112,14 +114,14 @@ impl Drop for AbortOnDrop {
 
 /// Reports the page's title whenever it differs from the last one, e.g. a VS Code window title
 /// that follows the active editor. Runs until the session drops `titles`.
-async fn watch_title(debugger: TargetDebuggerHandle, mut last: String, titles: mpsc::Sender<String>) {
+async fn watch_title<T: ScreencastTarget>(page: T, mut last: String, titles: mpsc::Sender<String>) {
     let mut interval = tokio::time::interval(TITLE_POLL);
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         interval.tick().await;
         // Target.getTargetInfo reflects `document.title` without running page script, so it works
         // while the page is paused in a debugger.
-        let Ok(info) = debugger.raw_cdp_request("Target.getTargetInfo".into(), serde_json::json!({})).await else {
+        let Ok(info) = page.raw_cdp_request("Target.getTargetInfo".into(), serde_json::json!({})).await else {
             continue;
         };
         let Some(title) = info.pointer("/targetInfo/title").and_then(serde_json::Value::as_str) else {

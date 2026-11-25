@@ -408,6 +408,16 @@ impl CdpDebuggerSession {
         self.channel.clone()
     }
 
+    /// Uses this session through raw CDP only, without the debugger engine that would enable
+    /// the `Runtime` and `Debugger` domains. Typed events are dropped instead of queued.
+    pub fn into_raw_target(self) -> RawCdpTarget {
+        RawCdpTarget {
+            session_id: self.session.session_id,
+            channel: self.channel,
+            raw_events: self.raw_events,
+        }
+    }
+
     pub async fn raw_request(&self, method: &str, params: Value) -> Result<Value, JsonRpcError> {
         self.channel.call(method, params).await
     }
@@ -1062,6 +1072,35 @@ pub struct RawCdpEvent {
     pub session: SessionKey,
     pub method: String,
     pub params: Value,
+}
+
+/// A target session that is only used through raw CDP requests and events, e.g. for a
+/// screencast. Unlike a target debugger, opening one costs no `Debugger.enable`, which takes
+/// seconds on pages with thousands of scripts.
+#[derive(Clone)]
+pub struct RawCdpTarget {
+    session_id: String,
+    channel: Channel,
+    raw_events: broadcast::Sender<RawCdpEvent>,
+}
+
+impl RawCdpTarget {
+    pub fn session_id(&self) -> &str {
+        &self.session_id
+    }
+
+    pub fn subscribe_raw_events(&self) -> broadcast::Receiver<RawCdpEvent> {
+        self.raw_events.subscribe()
+    }
+
+    pub async fn raw_cdp_request(&self, method: &str, params: Value) -> Result<Value, JsonRpcError> {
+        tokio::time::timeout(Duration::from_secs(30), self.channel.call(method, params))
+            .await
+            .map_err(|_| JsonRpcError::new(
+                linkrpc::prelude::error_codes::REQUEST_TIMEOUT,
+                format!("raw CDP request '{method}' timed out after 30 seconds"),
+            ))?
+    }
 }
 
 #[derive(Debug)]
