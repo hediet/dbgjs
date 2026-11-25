@@ -11,7 +11,7 @@
 //! that never leaves discovery running behind.
 
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock, Weak};
 
 use async_trait::async_trait;
@@ -33,6 +33,9 @@ use crate::connection::transport::cdp_transport::{ManagedCdpTransport, closed_tr
 use crate::api::service_api::TargetSnapshot;
 use crate::connection::transport::session_transport::{CdpEnvelope, CdpSessionMux, RawCdpSession};
 use crate::debugger::target_domain::{invalid_params, normalize_typed_cdp_params, target_info_from_snapshot};
+
+/// How long `attach_child` waits for a task routing the parent's events to claim the child's channel.
+const CHILD_ROUTE_CLAIM_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// One target a [`TargetSource`] knows about. `snapshot` is the provider-neutral CDP `TargetInfo`;
 /// the remaining fields carry per-target state the debugger service needs but
@@ -159,6 +162,18 @@ pub struct TargetEndpoint {
     owned_session_id: Option<String>,
     closed: watch::Sender<Option<String>>,
     tasks: std::sync::Mutex<Vec<JoinHandle<()>>>,
+    /// Tasks that route this endpoint's `Target.attachedToTarget` events, each claiming the
+    /// native child's CDP channel; see [`TargetEndpoint::route_child_events`].
+    child_event_routers: AtomicUsize,
+}
+
+/// Marks a task as routing an endpoint's child attachments while it is alive.
+struct ChildEventRouter(Arc<TargetEndpoint>);
+
+impl Drop for ChildEventRouter {
+    fn drop(&mut self) {
+        self.0.child_event_routers.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 impl TargetEndpoint {
@@ -191,6 +206,7 @@ impl TargetEndpoint {
             owned_session_id: None,
             closed,
             tasks: std::sync::Mutex::new(vec![mux_task, channel_task]),
+            child_event_routers: AtomicUsize::new(0),
         }))
     }
 
@@ -204,18 +220,18 @@ impl TargetEndpoint {
             .map_err(|error| format!("Target.attachToTarget failed: {error:?}"))?;
         let session_id = attached.session_id;
         let notifications = Arc::new(EndpointNotifications::default());
-        let mut existing = self.mux.raw_channel(&session_id);
-        if existing.is_none() {
-            // Native attachment events can precede the command reply but reach the
-            // process-tree route on a different task; let it claim the one CDP channel.
-            for _ in 0..400 {
-                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-                existing = self.mux.raw_channel(&session_id);
-                if existing.is_some() {
-                    break;
-                }
+        // The attach event precedes the reply, but a task routing this endpoint's child events
+        // handles it on its own schedule; let it claim the one CDP channel. Without such a task,
+        // nothing claims it, so waiting would only delay every attachment.
+        let existing = match self.mux.raw_channel(&session_id) {
+            Some(channel) => Some(channel),
+            None if self.child_event_routers.load(Ordering::SeqCst) > 0 => {
+                self.mux.wait_raw_channel(&session_id, CHILD_ROUTE_CLAIM_TIMEOUT).await
             }
-        }
+            None => None,
+        };
+        // A routed child's events reach a NativeChildHandler, which routes its children in turn.
+        let child_event_routers = AtomicUsize::new(usize::from(existing.is_some()));
         let (channel, tasks) = if let Some(channel) = existing {
             self.child_notifications
                 .lock()
@@ -270,7 +286,14 @@ impl TargetEndpoint {
             owned_session_id: Some(session_id),
             closed,
             tasks: std::sync::Mutex::new(tasks.into_iter().chain([detach_task]).collect()),
+            child_event_routers,
         }))
+    }
+
+    /// Registers the caller as routing this endpoint's child attachments until the guard drops.
+    fn route_child_events(self: &Arc<Self>) -> ChildEventRouter {
+        self.child_event_routers.fetch_add(1, Ordering::SeqCst);
+        ChildEventRouter(self.clone())
     }
 
     pub fn client(&self) -> CdpClient<Channel> {
@@ -1139,6 +1162,7 @@ impl VirtualRootState {
             async move { channel.run().await }
         })];
         let mut notifications = attachment.endpoint.subscribe();
+        let router = attachment.endpoint.route_child_events();
         let child_routes = self.child_routes.clone();
         let child_mux = self.mux.clone();
         let child_endpoint = attachment.endpoint.clone();
@@ -1146,6 +1170,7 @@ impl VirtualRootState {
         tasks.push(tokio::spawn({
             let channel = session_channel.clone();
             async move {
+                let _router = router;
                 while let Some((method, params)) = notifications.recv().await {
                     let Some((method, params)) = routed_child_event(
                         method,
@@ -2632,6 +2657,37 @@ mod tests {
                 .unwrap()["echo"],
             "Runtime.evaluate"
         );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn attach_child_waits_for_a_claim_only_while_a_task_routes_child_events() {
+        let transport = EchoTransport::new();
+        let parent = TargetEndpoint::open(transport.clone()).unwrap();
+        let start = tokio::time::Instant::now();
+        let unrouted = parent.attach_child("iframe").await.unwrap();
+        assert!(start.elapsed() < std::time::Duration::from_millis(100), "{:?}", start.elapsed());
+
+        let transport = EchoTransport::new();
+        let parent = TargetEndpoint::open(transport.clone()).unwrap();
+        let _router = parent.route_child_events();
+        let claim = tokio::spawn({
+            let mux = parent.mux.clone();
+            async move {
+                tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                mux.ensure_raw_channel("native-child").unwrap()
+            }
+        });
+        let start = tokio::time::Instant::now();
+        let routed = parent.attach_child("iframe").await.unwrap();
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed >= std::time::Duration::from_millis(300) && elapsed < CHILD_ROUTE_CLAIM_TIMEOUT,
+            "{elapsed:?}"
+        );
+        claim.await.unwrap();
+        // Only a claimed channel makes the child routed in turn.
+        assert_eq!(routed.child_event_routers.load(Ordering::SeqCst), 1);
+        assert_eq!(unrouted.child_event_routers.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]

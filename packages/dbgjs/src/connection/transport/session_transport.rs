@@ -10,7 +10,7 @@ use linkrpc::prelude::{
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{Notify, mpsc, watch};
 use tokio::task::JoinHandle;
 
 pub type SessionId = String;
@@ -98,6 +98,8 @@ pub struct CdpSessionMux {
     inner: Arc<InnerMux>,
     channels: Arc<Mutex<HashMap<String, Weak<InnerChannel>>>>,
     raw_routes: Arc<Mutex<HashMap<String, Arc<RawSessionRoute>>>>,
+    /// Notified whenever a raw route is added, so callers can wait for another task to route a session.
+    raw_route_added: Arc<Notify>,
     raw_route_limit: Arc<AtomicUsize>,
     notification_limit: Arc<AtomicUsize>,
     unresolved_call_limit: Arc<AtomicUsize>,
@@ -110,6 +112,7 @@ impl CdpSessionMux {
             inner: Arc::new(MultiplexedTransport::with_codec(raw, CdpEnvelopeCodec)),
             channels: Arc::new(Mutex::new(HashMap::new())),
             raw_routes: Arc::new(Mutex::new(HashMap::new())),
+            raw_route_added: Arc::new(Notify::new()),
             raw_route_limit: Arc::new(AtomicUsize::new(RAW_ROUTE_LIMIT)),
             notification_limit: Arc::new(AtomicUsize::new(RAW_NOTIFICATION_LIMIT)),
             unresolved_call_limit: Arc::new(AtomicUsize::new(RAW_UNRESOLVED_CALL_LIMIT)),
@@ -190,6 +193,23 @@ impl CdpSessionMux {
             .get(id)
             .filter(|route| route.failure.borrow().is_none())
             .map(|route| route.channel.clone())
+    }
+
+    /// Like [`Self::raw_channel`], but waits up to `timeout` for another task to route `id`.
+    pub async fn wait_raw_channel(&self, id: &str, timeout: std::time::Duration) -> Option<Channel> {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            let added = self.raw_route_added.notified();
+            tokio::pin!(added);
+            // Registered before checking, so a route added in between still wakes this task.
+            added.as_mut().enable();
+            if let Some(channel) = self.raw_channel(id) {
+                return Some(channel);
+            }
+            if tokio::time::timeout_at(deadline, added).await.is_err() {
+                return None;
+            }
+        }
     }
 
     pub fn ensure_raw_channel(&self, id: &str) -> Result<Channel, OpenSessionError> {
@@ -359,6 +379,7 @@ impl CdpSessionMux {
             synthetic_detach_pending: AtomicBool::new(false),
         });
         routes.insert(id.to_owned(), route.clone());
+        self.raw_route_added.notify_waiters();
         Ok(route)
     }
 
